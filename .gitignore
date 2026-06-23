@@ -4,3 +4,4 @@ __pycache__/
 .venv/
 dist/
 data/vm_entry.db
+data/log/
