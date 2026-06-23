@@ -144,6 +144,7 @@ def _form_defaults():
 		'disk': '',
 		'cpu': '',
 		'switch': '',
+		'debug_ticket_only': '', 
 	}
 
 CONFIRM_FIELDS = [
@@ -593,7 +594,7 @@ def index():
 					'entry',
 					_get_session_user_name(),
 					'info',
-					f'confirm vm_name={vm_name} subnet={ticket_data["target_subnet"]} ip={confirmed_ip}'
+					f'confirm vm_name={form_data.get("vm_name", "")} subnet={ticket_data["target_subnet"]} ip={confirmed_ip}'
 				)
 			except Exception as exc:
 				error = str(exc)
