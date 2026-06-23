@@ -451,32 +451,32 @@ def _build_ticket_url(ticket_id):
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-	if _get_session_api_key() or _is_admin_session():
-		return redirect(url_for('index'))
+    if _get_session_api_key() or _is_admin_session():
+        return redirect(url_for('index'))
 
-	error = None
-	if request.method == 'POST':
-		api_key = (request.form.get('api_key') or '').strip()
-		if not api_key:
-			error = 'APIキーを入力してください。'
-		elif db.is_admin_key(api_key) or (api_key and api_key == (db.get_setting('admin_username', '') or '').strip()):
-			session[SESSION_API_KEY] = ''
-			session[SESSION_USER_NAME] = db.get_setting('admin_username', '')
-			session[SESSION_USER_ROLE] = 'admin'
-			session[SESSION_IS_ADMIN] = True
-			return redirect(url_for('admin'))
-		else:
-			try:
-				user = redmine.get_current_user(api_key=api_key)
-				session[SESSION_API_KEY] = api_key
-				session[SESSION_USER_NAME] = _build_user_display_name(user)
-				session[SESSION_USER_ROLE] = 'user'
-				session[SESSION_IS_ADMIN] = False
-				return redirect(url_for('index'))
-			except Exception as exc:
-				error = str(exc)
+    error = None
+    if request.method == 'POST':
+        api_key = (request.form.get('api_key') or '').strip()
+        if not api_key:
+            error = 'APIキーを入力してください。'
+        elif db.is_admin_key(api_key) or (api_key and api_key == (db.get_setting('admin_username', '') or '').strip()):
+            session[SESSION_API_KEY] = ''
+            session[SESSION_USER_NAME] = db.get_setting('admin_username', '')
+            session[SESSION_USER_ROLE] = 'admin'
+            session[SESSION_IS_ADMIN] = True
+            return redirect(url_for('index'))
+        else:
+            try:
+                user = redmine.get_current_user(api_key=api_key)
+                session[SESSION_API_KEY] = api_key
+                session[SESSION_USER_NAME] = _build_user_display_name(user)
+                session[SESSION_USER_ROLE] = 'user'
+                session[SESSION_IS_ADMIN] = False
+                return redirect(url_for('index'))
+            except Exception as exc:
+                error = str(exc)
 
-	return render_template('login.html', error=error)
+    return render_template('login.html', error=error)
 
 
 @app.route('/logout', methods=['GET'])
@@ -560,125 +560,137 @@ def admin():
 	)
 
 
-@app.route('/', methods=['GET', 'POST'])
+@app.route('/', methods=['GET'])
 def index():
-	if not (_get_session_api_key() or _is_admin_session()):
-		return redirect(url_for('login'))
-	api_key = _get_session_api_key()
-	if not api_key:
-		return redirect(url_for('admin') if _is_admin_session() else url_for('login'))
+    if not (_get_session_api_key() or _is_admin_session()):
+        return redirect(url_for('login'))
 
-	form_data = request.form if request.method == 'POST' else {}
-	values = _build_values(form_data)
-	error = None
-	result = None
-	notice = None
-	confirm = False
-	confirmed_ip = ''
-	action = (form_data.get('action') or '').strip()
-	confirm_display_values = _build_confirm_display_values(values)
+    return render_template(
+        'index.html',
+        user_name=_get_session_user_name(),
+        is_admin=_is_admin_session(),
+    )
 
-	if request.method == 'POST' and action in ('confirm', 'create'):
-		selected_subnets = {value for value, _ in CURRENT_SUBNET_OPTIONS}
-		if values.get('target_subnet') not in selected_subnets and CURRENT_SUBNET_OPTIONS:
-			values['target_subnet'] = CURRENT_SUBNET_OPTIONS[0][0]
-		ticket_data, errors = _build_ticket_data(form_data)
-		if errors:
-			error = ' '.join(errors)
-			db.append_log(
-				'entry',
-				_get_session_user_name(),
-				'error',
-				f'{action} validation error: {error}'
-			)
-		elif action == 'confirm':
-			try:
-				project_id = redmine.get_redmine_project_id(db.get_setting('project_name', ''), api_key=api_key)
-				if project_id is None:
-					raise RuntimeError(f'プロジェクトが見つかりません: {db.get_setting("project_name", "")}')
-				confirmed_ip, _ = redmine.allocate_next_ip(
-					project_id,
-					ticket_data['target_subnet'],
-					api_key=api_key,
-				)
-				confirm = True
-				db.append_log(
-					'entry',
-					_get_session_user_name(),
-					'info',
-					f'confirm vm_name={form_data.get("vm_name", "")} subnet={ticket_data["target_subnet"]} ip={confirmed_ip}'
-				)
-			except Exception as exc:
-				error = str(exc)
-				db.append_log(
-					'entry',
-					_get_session_user_name(),
-					'error',
-					f'confirm failed: {error}'
-				)
 
-		else:
-			try:
-				project_id = redmine.get_redmine_project_id(db.get_setting('project_name', ''), api_key=api_key)
-				if project_id is None:
-					raise RuntimeError(f'プロジェクトが見つかりません: {db.get_setting("project_name", "")}')
-				confirmed_ip = (form_data.get('confirmed_ip') or '').strip()
-				if not confirmed_ip:
-					raise RuntimeError('確認画面の割当予定IPが取得できません。確認画面から再実行してください。')
-				if redmine.is_ip_already_registered(project_id, confirmed_ip, api_key=api_key):
-					raise RuntimeError(
-						f'確認後に同一IP ({confirmed_ip}) が登録されました。'
-						'入力画面に戻って再確認してください。'
-					)
-				result = redmine.create_redmine_ticket(project_id, ticket_data, confirmed_ip, api_key=api_key)
-				if result.get('result') != 'success':
-					error = result.get('message', 'チケット登録に失敗しました。')
-					db.append_log(
-						'entry',
-						_get_session_user_name(),
-						'error',
-						f'create failed: {error}'
-					)
-				else:
-					result['url'] = result.get('url') or _build_ticket_url(result.get('id'))
-					result['subject'] = ticket_data.get('subject')
-					result['vm_name'] = form_data.get('vm_name')
-					result['target_subnet'] = ticket_data.get('target_subnet')
-					db.append_log(
-						'entry',
-						_get_session_user_name(),
-						'info',
-						f'create success ticket_id={result.get("id")} vm_name={result.get("vm_name")} subnet={result.get("target_subnet")} ip={confirmed_ip}'
-					)	
-			except Exception as exc:
-				error = str(exc)
-				db.append_log(
-					'entry',
-					_get_session_user_name(),
-					'error',
-					f'create exception: {error}'
-				)
+@app.route('/entry', methods=['GET', 'POST'])
+def entry():
+    if not (_get_session_api_key() or _is_admin_session()):
+        return redirect(url_for('login'))
+    api_key = _get_session_api_key()
+    if not api_key:
+        return redirect(url_for('admin') if _is_admin_session() else url_for('login'))
 
-	return render_template(
-		'index.html',
-		values=values,
-		confirm_display_values=confirm_display_values,
-		confirm=confirm,
-		confirmed_ip=confirmed_ip,
-		confirm_fields=CONFIRM_FIELDS,
-		error=error,
-		result=result,
-		notice=notice,
-		user_name=_get_session_user_name(),
-		is_admin=_is_admin_session(),
-		subnet_options=CURRENT_SUBNET_OPTIONS,
-		vhost_options=sorted(CURRENT_VHOST_IP_DISPLAY_MAP.items(), key=lambda item: item[1]),
-		os_options=CURRENT_OS_OPTIONS,
-		usage_options=CURRENT_USAGE_OPTIONS,
-		usage_selected={item.strip() for item in (values.get('usage') or '').split(',') if item.strip()},
-		assignee_names=sorted(CURRENT_ASSIGNEE_NAME_TO_ID.keys()),
-		template_options=CURRENT_VM_TEMPLATE_OPTIONS,
-	)
+    form_data = request.form if request.method == 'POST' else {}
+    values = _build_values(form_data)
+    error = None
+    result = None
+    notice = None
+    confirm = False
+    confirmed_ip = ''
+    action = (form_data.get('action') or '').strip()
+    confirm_display_values = _build_confirm_display_values(values)
+
+    if request.method == 'POST' and action in ('confirm', 'create'):
+        selected_subnets = {value for value, _ in CURRENT_SUBNET_OPTIONS}
+        if values.get('target_subnet') not in selected_subnets and CURRENT_SUBNET_OPTIONS:
+            values['target_subnet'] = CURRENT_SUBNET_OPTIONS[0][0]
+        ticket_data, errors = _build_ticket_data(form_data)
+        if errors:
+            error = ' '.join(errors)
+            db.append_log(
+                'entry',
+                _get_session_user_name(),
+                'error',
+                f'{action} validation error: {error}'
+            )
+        elif action == 'confirm':
+            try:
+                project_id = redmine.get_redmine_project_id(db.get_setting('project_name', ''), api_key=api_key)
+                if project_id is None:
+                    raise RuntimeError(f'プロジェクトが見つかりません: {db.get_setting("project_name", "")}')
+                confirmed_ip, _ = redmine.allocate_next_ip(
+                    project_id,
+                    ticket_data['target_subnet'],
+                    api_key=api_key,
+                )
+                confirm = True
+                db.append_log(
+                    'entry',
+                    _get_session_user_name(),
+                    'info',
+                    f'confirm vm_name={form_data.get("vm_name", "")} subnet={ticket_data["target_subnet"]} ip={confirmed_ip}'
+                )
+            except Exception as exc:
+                error = str(exc)
+                db.append_log(
+                    'entry',
+                    _get_session_user_name(),
+                    'error',
+                    f'confirm failed: {error}'
+                )
+
+        else:
+            try:
+                project_id = redmine.get_redmine_project_id(db.get_setting('project_name', ''), api_key=api_key)
+                if project_id is None:
+                    raise RuntimeError(f'プロジェクトが見つかりません: {db.get_setting("project_name", "")}')
+                confirmed_ip = (form_data.get('confirmed_ip') or '').strip()
+                if not confirmed_ip:
+                    raise RuntimeError('確認画面の割当予定IPが取得できません。確認画面から再実行してください。')
+                if redmine.is_ip_already_registered(project_id, confirmed_ip, api_key=api_key):
+                    raise RuntimeError(
+                        f'確認後に同一IP ({confirmed_ip}) が登録されました。'
+                        '入力画面に戻って再確認してください。'
+                    )
+                result = redmine.create_redmine_ticket(project_id, ticket_data, confirmed_ip, api_key=api_key)
+                if result.get('result') != 'success':
+                    error = result.get('message', 'チケット登録に失敗しました。')
+                    db.append_log(
+                        'entry',
+                        _get_session_user_name(),
+                        'error',
+                        f'create failed: {error}'
+                    )
+                else:
+                    result['url'] = result.get('url') or _build_ticket_url(result.get('id'))
+                    result['subject'] = ticket_data.get('subject')
+                    result['vm_name'] = form_data.get('vm_name')
+                    result['target_subnet'] = ticket_data.get('target_subnet')
+                    db.append_log(
+                        'entry',
+                        _get_session_user_name(),
+                        'info',
+                        f'create success ticket_id={result.get("id")} vm_name={result.get("vm_name")} subnet={result.get("target_subnet")} ip={confirmed_ip}'
+                    )
+            except Exception as exc:
+                error = str(exc)
+                db.append_log(
+                    'entry',
+                    _get_session_user_name(),
+                    'error',
+                    f'create exception: {error}'
+                )
+
+    return render_template(
+        'entry.html',
+        values=values,
+        confirm_display_values=confirm_display_values,
+        confirm=confirm,
+        confirmed_ip=confirmed_ip,
+        confirm_fields=CONFIRM_FIELDS,
+        error=error,
+        result=result,
+        notice=notice,
+        user_name=_get_session_user_name(),
+        is_admin=_is_admin_session(),
+        subnet_options=CURRENT_SUBNET_OPTIONS,
+        vhost_options=sorted(CURRENT_VHOST_IP_DISPLAY_MAP.items(), key=lambda item: item[1]),
+        os_options=CURRENT_OS_OPTIONS,
+        usage_options=CURRENT_USAGE_OPTIONS,
+        usage_selected={item.strip() for item in (values.get('usage') or '').split(',') if item.strip()},
+        assignee_names=sorted(CURRENT_ASSIGNEE_NAME_TO_ID.keys()),
+        template_options=CURRENT_VM_TEMPLATE_OPTIONS,
+    )
 
 
 if __name__ == '__main__':
