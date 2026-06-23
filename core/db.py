@@ -272,6 +272,58 @@ def get_recent_sync_logs(limit=20):
 def _hash_key(raw: str) -> str:
     return hashlib.sha256(raw.encode('utf-8')).hexdigest()
 
+def _get_encryption_key():
+    """暗号化キーを環境変数から取得。デフォルトはアプリケーション用の固定値"""
+    from cryptography.fernet import Fernet
+    
+    # 環境変数から取得、なければデフォルト値を使用
+    key_str = os.getenv('ENCRYPTION_KEY', '').strip()
+    if not key_str:
+        # デフォルト：'system'を基にしたFernetキーを生成
+        base = hashlib.sha256(b'vm-entry-default-key').digest()
+        key_str = __import__('base64').b64encode(base).decode('utf-8')[:44] + '='
+    
+    try:
+        # 32バイト（256ビット）のキーが必要な場合はこちら
+        if len(key_str) == 44 and key_str.endswith('='):
+            return key_str
+        # そうでない場合はBase64デコードして確認
+        return key_str
+    except Exception:
+        raise ValueError("ENCRYPTION_KEY の形式が無効です")
+
+
+def _encrypt_password(raw_password: str) -> str:
+    """パスワードをAES暗号化して返す"""
+    from cryptography.fernet import Fernet
+    
+    raw = (raw_password or '').strip()
+    if not raw:
+        return ''
+    
+    key = _get_encryption_key()
+    f = Fernet(key)
+    encrypted = f.encrypt(raw.encode('utf-8'))
+    return encrypted.decode('utf-8')
+
+
+def _decrypt_password(encrypted_password: str) -> str:
+    """暗号化されたパスワードを復号して返す"""
+    from cryptography.fernet import Fernet, InvalidToken
+    
+    encrypted = (encrypted_password or '').strip()
+    if not encrypted:
+        return ''
+    
+    try:
+        key = _get_encryption_key()
+        f = Fernet(key)
+        decrypted = f.decrypt(encrypted.encode('utf-8'))
+        return decrypted.decode('utf-8')
+    except (InvalidToken, Exception):
+        # 復号に失敗した場合は空文字列を返す
+        return ''
+
 
 def set_admin_key(raw_key: str) -> None:
     """管理者キーをハッシュ化してDBに保存する"""

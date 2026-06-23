@@ -517,16 +517,22 @@ def admin():
 
 	if request.method == "POST" and action == "save_hyperv_hosts":
 		try:
-			keys = []
+			payload = {}
 			for i in range(1, 4):
-				keys.extend(
-					[
-					f"hyperv_host{i}_ip",
-					f"hyperv_host{i}_user",
-					f"hyperv_host{i}_password",
-					]
-				)
-			payload = {key: (request.form.get(key) or "").strip() for key in keys}
+				ip = (request.form.get(f"hyperv_host{i}_ip") or "").strip()
+				user = (request.form.get(f"hyperv_host{i}_user") or "").strip()
+				password = (request.form.get(f"hyperv_host{i}_password") or "").strip()
+				
+				payload[f"hyperv_host{i}_ip"] = ip
+				payload[f"hyperv_host{i}_user"] = user
+				
+				# パスワードは暗号化して保存
+				if password:
+					payload[f"hyperv_host{i}_password"] = db._encrypt_password(password)
+				elif ip or user:
+					# IPまたはユーザーがある場合、既存パスワードを保持
+					payload[f"hyperv_host{i}_password"] = db.get_setting(f"hyperv_host{i}_password", "")
+			
 			db.set_settings(payload, updated_by=_get_session_user_name())
 			message = "Hyper-Vホスト設定を保存しました。"
 		except Exception as exc:
@@ -539,9 +545,15 @@ def admin():
 		except Exception as exc:
 			error = str(exc)
 
+	# パスワードは表示しないようにマスク（セキュリティ対策）
+	settings_display = dict(db.get_all_settings())
+	for i in range(1, 4):
+		if settings_display.get(f"hyperv_host{i}_password"):
+			settings_display[f"hyperv_host{i}_password"] = ""
+
 	return render_template(
 		'admin.html',
-		settings=db.get_all_settings(),
+		settings=settings_display,
 		logs=db.get_recent_logs(20),
 		message=message,
 		error=error,

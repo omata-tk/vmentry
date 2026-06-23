@@ -71,14 +71,20 @@ def get_vm_templates_from_hosts(hosts_config):
         templates: [(vm_name, vm_name), ...]
         host_results: [{host, status, message, count}, ...]
     """
+    from core import db
+    
     merged = {}
     host_results = []
 
     for idx, host in enumerate(hosts_config, start=1):
+        host_name = f"Hyper-V ホスト{idx}"
         ip = (host.get("ip") or "").strip()
         user = (host.get("user") or "").strip()
-        password = (host.get("password") or "").strip()
-        host_name = f"host{idx}:{ip or '(empty)'}"
+        password_encrypted = (host.get("password") or "").strip()
+        
+        # 暗号化されたパスワードを復号
+        password = db._decrypt_password(password_encrypted)
+        
 
         # いずれか空欄なら接続しない
         if not ip or not user or not password:
