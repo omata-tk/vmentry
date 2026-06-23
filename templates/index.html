@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>VM Entry</title>
+  <style>
+    body { margin: 0; font-family: "Hiragino Sans", "Yu Gothic", "Noto Sans JP", sans-serif; background: linear-gradient(180deg, #f8fafc, #eef4f8); color: #0f172a; }
+    .shell { max-width: 1260px; margin: 0 auto; padding: 28px 18px 56px; }
+	.topbar { display: flex; justify-content: flex-end; margin-bottom: 14px; }
+	.user-chip { display: inline-flex; align-items: center; gap: 12px; padding: 8px 12px; border-radius: 999px; background: rgba(15,23,42,.08); color: #0f172a; font-weight: 700; font-size: .86rem; }
+	.top-actions { display: inline-flex; align-items: center; gap: 8px; }
+	.top-actions form { margin: 0; }
+	.mini-button { border: 1px solid rgba(15,118,110,.35); background: rgba(255,255,255,.7); color: #0f766e; border-radius: 999px; padding: 5px 10px; font: inherit; font-size: .78rem; font-weight: 800; cursor: pointer; }
+	.mini-button:hover { background: #ffffff; }
+	.mini-link { display: inline-flex; align-items: center; border: 1px solid rgba(15,118,110,.35); background: rgba(255,255,255,.7); color: #0f766e; border-radius: 999px; padding: 5px 10px; font-size: .78rem; font-weight: 800; text-decoration: none; }
+	.mini-link:hover { background: #ffffff; }
+	.logout-link { color: #0f766e; text-decoration: none; font-weight: 800; }
+	.logout-link:hover { text-decoration: underline; }
+	.hero { border-radius: 28px; padding: 28px; color: #f8fafc; background: linear-gradient(135deg, #0f172a, #0f766e); box-shadow: 0 24px 70px rgba(15, 23, 42, .18); }
+    .hero h1 { margin: 0; font-size: clamp(2rem, 4vw, 3.5rem); line-height: 1.08; }
+    .hero p { margin: 14px 0 0; max-width: 860px; color: rgba(248,250,252,.9); line-height: 1.8; }
+    .hero-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 12px; margin-top: 20px; }
+    .hero-stat { padding: 14px 16px; border-radius: 18px; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.16); }
+    .hero-stat strong { display: block; margin-bottom: 6px; }
+    .layout { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(280px, .85fr); gap: 18px; margin-top: 18px; }
+    .card { border-radius: 24px; background: rgba(255,255,255,.8); border: 1px solid rgba(148,163,184,.24); box-shadow: 0 24px 60px rgba(15,23,42,.08); backdrop-filter: blur(18px); }
+    .card-body { padding: 22px; }
+    .section-title { margin: 0 0 8px; font-size: 1.02rem; }
+    .section-subtitle { margin: 0 0 18px; color: #64748b; line-height: 1.7; }
+    .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 14px; }
+    .field.full { grid-column: 1 / -1; }
+    label { display: block; margin-bottom: 6px; font-size: .82rem; font-weight: 700; color: #334155; }
+    input, select, textarea { width: 100%; box-sizing: border-box; border: 1px solid #cbd5e1; border-radius: 15px; padding: 12px 14px; font: inherit; background: #fff; color: #0f172a; }
+    textarea { min-height: 112px; resize: vertical; }
+    .help { margin-top: 6px; color: #64748b; font-size: .78rem; line-height: 1.5; }
+	.actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+    .button { border: 0; border-radius: 14px; padding: 14px 18px; font: inherit; font-weight: 800; cursor: pointer; color: white; background: linear-gradient(135deg, #0f766e, #2563eb); }
+    .sidebar { display: grid; gap: 16px; }
+    .note { padding: 18px; border-radius: 18px; background: rgba(255,255,255,.84); border: 1px solid rgba(148,163,184,.24); }
+    .note h3 { margin: 0 0 10px; font-size: .98rem; }
+    .note p, .note li { margin: 0; color: #64748b; line-height: 1.7; font-size: .88rem; }
+    .note ul { margin: 0; padding-left: 18px; }
+    .status { margin-bottom: 18px; padding: 16px 18px; border-radius: 16px; }
+    .status.success { background: rgba(22,101,52,.1); border: 1px solid rgba(22,101,52,.18); color: #166534; }
+    .status.error { background: rgba(180,83,9,.1); border: 1px solid rgba(180,83,9,.18); color: #b45309; }
+    .status strong { display: block; margin-bottom: 6px; }
+    .pill-row { display: flex; flex-wrap: wrap; gap: 8px; }
+    .pill { display: inline-flex; align-items: center; padding: 8px 10px; border-radius: 999px; background: rgba(15,23,42,.06); font-size: .8rem; font-weight: 700; color: #334155; }
+		.confirm-sheet { border-radius: 16px; border: 1px solid #dbe3ee; background: #f8fafc; padding: 14px; }
+		.confirm-list { margin: 0; display: grid; grid-template-columns: 170px minmax(0,1fr); row-gap: 10px; column-gap: 12px; }
+		.confirm-list dt { margin: 0; font-size: .83rem; font-weight: 800; color: #334155; }
+		.confirm-list dd { margin: 0; color: #0f172a; white-space: pre-wrap; word-break: break-word; }
+    .required-mark { color: #dc2626; font-weight: 900; margin-left: 3px; }
+    .check-list { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px 12px; border: 1px solid #cbd5e1; border-radius: 15px; background: #fff; padding: 10px 12px; }
+    .check-item { display: flex; align-items: center; gap: 8px; color: #0f172a; font-size: .9rem; }
+    .check-item input { width: auto; }
+    @media (max-width: 960px) { .layout, .hero-grid, .form-grid { grid-template-columns: 1fr; } }
+		@media (max-width: 960px) { .check-list { grid-template-columns: 1fr; } }
+		@media (max-width: 720px) { .confirm-list { grid-template-columns: 1fr; } }
+    @media (max-width: 720px) { .shell { padding: 16px 12px 28px; } .hero, .card-body { padding: 18px; } .actions { justify-content: stretch; } .button { width: 100%; } }
+  </style>
+</head>
+<body>
+  <main class="shell">
+		<div class="topbar">
+			<div class="user-chip">
+				<span>{{ user_name }}</span>
+				<span class="top-actions">
+					{% if is_admin %}<a class="mini-link" href="{{ url_for('admin') }}">管理画面</a>{% endif %}
+					{% if not is_admin %}<a class="mini-link" href="{{ url_for('index') }}">入力フォームへ</a>{% endif %}
+					<a class="logout-link" href="{{ url_for('logout') }}">ログアウト</a>
+				</span>
+			</div>
+		</div>
+    <section class="hero">
+			<h1>VM Entry</h1>
+			<p>このフォームから必要な情報を入力すると、VMの登録情報をまとめて作成できます。入力内容はそのまま台帳管理に反映されるため、手作業での記入漏れを減らせます。</p>
+      <div class="hero-grid">
+        <div class="hero-stat"><strong>1. 入力</strong><span>利用者がフォームに必要事項を入力</span></div>
+				<div class="hero-stat"><strong>2. 登録</strong><span>入力内容をそのまま登録</span></div>
+				<div class="hero-stat"><strong>3. 完了</strong><span>登録結果を画面で確認</span></div>
+      </div>
+    </section>
+
+    <div class="layout">
+      <section class="card">
+        <div class="card-body">
+          {% if error %}
+          <div class="status error"><strong>入力または登録でエラー</strong>{{ error }}</div>
+          {% endif %}
+					{% if result and result.result == 'success' %}
+					<div class="status success">
+			<strong>登録完了</strong>
+			<div>チケット ID {{ result.id }} を作成しました。割当 IP は {{ result.ip }} です。</div>
+			{% if result.url %}<div>URL: <a href="{{ result.url }}" target="_blank" rel="noopener noreferrer">{{ result.url }}</a></div>{% endif %}
+			{% if result.subject %}<div>Redmineチケット名: {{ result.subject }}</div>{% endif %}
+			{% if result.vm_name %}<div>仮想マシン名: {{ result.vm_name }}</div>{% endif %}
+			{% if result.target_subnet %}<div>対象サブネット: {{ result.target_subnet }}</div>{% endif %}
+		</div>
+          {% endif %}
+		  {% if notice %}
+		  <div class="status success"><strong>最新情報を取得しました</strong>{{ notice }}</div>
+		  {% endif %}
+
+		  <h2 class="section-title">Redmineチケット</h2>
+		  <p class="section-subtitle">必要項目を入力し、確認画面で内容を確認してから登録してください。</p>
+
+					{% if confirm %}
+					<div class="status success"><strong>入力内容の確認</strong>内容を確認して問題なければ「この内容で作成」を押してください。</div>
+					<form method="post">
+						{% for key, value in values.items() %}
+						<input type="hidden" name="{{ key }}" value="{{ value }}">
+						{% endfor %}
+						<input type="hidden" name="confirmed_ip" value="{{ confirmed_ip }}">
+						<div class="confirm-sheet">
+							<dl class="confirm-list">
+								<dt>割当予定IP</dt><dd>{{ confirmed_ip }}</dd>
+                {% for field_key, field_label in confirm_fields %}
+                  <dt>{{ field_label }}</dt>
+                  <dd>
+                  {%- if field_key == 'usage' -%}
+                    {%- for v in usage_selected -%}{{- dict(usage_options)[v] -}}{%- if not loop.last %}, {% endif -%}{%- else -%}-{%- endfor -%}
+                  {%- else -%}
+                    {{ confirm_display_values[field_key] or '-' }}
+                  {%- endif -%}
+                  </dd>
+                {% endfor %}
+							</dl>
+						</div>
+						<div class="actions">
+							<button class="button" type="submit" name="action" value="edit">入力フォームに戻る</button>
+							<button class="button" type="submit" name="action" value="create">この内容で作成</button>
+						</div>
+					</form>
+					{% else %}
+          <form method="post">
+            <div class="form-grid">
+              <div class="field"><label for="target_subnet">対象サブネット<span class="required-mark">*</span></label><select id="target_subnet" name="target_subnet" required>{% for value, label in subnet_options %}<option value="{{ value }}" {% if values.target_subnet == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select><div class="help">IP 採番の対象です。</div></div>
+			        <div class="field"><label for="subject">Redmineチケット名<span class="required-mark">*</span></label><input id="subject" name="subject" value="{{ values.subject }}" required></div>
+			        <div class="field"><label for="assignee_name">担当者</label><input id="assignee_name" name="assignee_name" value="{{ values.assignee_name }}" list="assignee_names"><datalist id="assignee_names">{% for name in assignee_names %}<option value="{{ name }}"></option>{% endfor %}</datalist></div>
+              <div class="field"><label for="start_date">開始日</label><input id="start_date" name="start_date" type="date" value="{{ values.start_date }}"></div>
+              <div class="field"><label for="due_date">期日</label><input id="due_date" name="due_date" type="date" value="{{ values.due_date }}"></div>
+              <div class="field full"><label for="description">説明文</label><textarea id="description" name="description">{{ values.description }}</textarea></div>
+			        <div class="field"><label for="vm_name">仮想マシン名<span class="required-mark">*</span></label><input id="vm_name" name="vm_name" value="{{ values.vm_name }}" required></div>
+			        <div class="field"><label for="os_value">OS</label><select id="os_value" name="os_value"><option value="">未選択</option>{% for value, label in os_options %}<option value="{{ value }}" {% if values.os_value == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
+              <div class="field"><label for="vhost_ip">IPアドレス（仮想ホスト）</label><select id="vhost_ip" name="vhost_ip"><option value="">未選択</option>{% for value, label in vhost_options %}<option value="{{ value }}" {% if values.vhost_ip == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
+              <div class="field"><label for="os_user">OSユーザー</label><input id="os_user" name="os_user" value="{{ values.os_user }}"></div>
+              <div class="field"><label for="os_password">OSパスワード</label><input id="os_password" name="os_password" type="password" value="{{ values.os_password }}"></div>
+              <div class="field"><label for="os_product_key">OSプロダクトキー</label><input id="os_product_key" name="os_product_key" value="{{ values.os_product_key }}"></div>
+              <div class="field"><label for="os_product_key_owner">OSプロダクトキー所有者</label><input id="os_product_key_owner" name="os_product_key_owner" value="{{ values.os_product_key_owner }}"></div>
+			        <div class="field full"><label>利用用途</label><div class="check-list">{% for value, label in usage_options %}<label class="check-item"><input type="checkbox" name="usage" value="{{ value }}" {% if value in usage_selected %}checked{% endif %}>{{ label }}</label>{% endfor %}</div><div class="help">Redmineの候補を複数選択できます。</div></div>
+              <div class="field full"><label for="usage_other">利用用途（その他）</label><input id="usage_other" name="usage_other" value="{{ values.usage_other }}"></div>
+              <div class="field full"><label for="system_login_info">システムログイン情報</label><textarea id="system_login_info" name="system_login_info">{{ values.system_login_info }}</textarea></div>
+              <div class="field"><label for="initial_builder">初期構築担当者</label><input id="initial_builder" name="initial_builder" value="{{ values.initial_builder }}" list="assignee_names"><datalist id="assignee_names">{% for name in assignee_names %}<option value="{{ name }}"></option>{% endfor %}</datalist></div>
+              <div class="field"><label for="notes">特記事項</label><input id="notes" name="notes" value="{{ values.notes }}"></div>
+        </div>
+      <h2 class="section-title">仮想マシン</h2>
+		  <p class="section-subtitle">必要項目を入力し、確認画面で内容を確認してから登録してください。</p>
+        <div class="field full" style="padding: 14px; border-radius: 15px; background: #fef2f2; border: 1px solid #fecaca; margin-bottom: 18px;">
+          <label class="check-item" style="margin-bottom: 0;">
+            <input type="checkbox" name="debug_ticket_only" {% if values.debug_ticket_only %}checked{% endif %}>
+            <strong style="color: #dc2626;">チケットだけ作成する（デバッグ用）</strong>
+          </label>
+          <div class="help" style="margin-top: 8px; color: #b91c1c;">
+            このチェックボックスをONにすると、VM作成をスキップし、Redmineチケットのみ作成します。
+          </div>
+        </div>
+        <div class="field"><label for="deploy_type">作成方法<span class="required-mark">*</span></label><select id="deploy_type" name="deploy_type" required><option value="template" {% if values.deploy_type == "template" %}selected{% endif %}>テンプレートから作成</option><option value="manual" {% if values.deploy_type == "manual" %}selected{% endif %}>手動作成</option></select></div>
+        <div class="field" id="template-field"><label for="vm_template">VMテンプレート</label><select id="vm_template" name="vm_template"><option value="">未選択</option>{% for value, label in template_options %}<option value="{{ value }}" {% if values.vm_template == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
+      <div id="manual-fields">
+        <div class="field"><label>メモリ(GB)</label><input type="number" name="memory" value="{{ values.memory or 2 }}"></div>
+        <div class="field"><label>ディスク(GB)</label><input type="number" name="disk" value="{{ values.disk or 40 }}"></div>
+        <div class="field"><label>CPU数</label><input type="number" name="cpu" value="{{ values.cpu or 2 }}"></div>
+        <div class="field">
+          <label>仮想スイッチ</label>
+          <input type="text" name="switch" value="{{ values.switch or 'Default Switch' }}">
+        </div>
+      </div>
+        </div>
+
+						<div class="actions">
+							<button class="button" type="submit" name="action" value="confirm">確認する</button>
+						</div>
+          </form>
+	          {% endif %}
+    </div>
+      </section>
+
+      <aside class="sidebar">
+        <section class="note">
+          <h3>運用メモ</h3>
+		      <p>この画面は VM を登録するための入力フォームです。担当者は名前で指定できます。</p>
+        </section>
+        <section class="note">
+          <h3>処理の流れ</h3>
+          <ul>
+						<li>必要項目を入力して登録ボタンを押します。</li>
+						<li>対象サブネットに応じて IP が自動で割り当てられます。</li>
+						<li>登録結果が画面に表示されます。</li>
+          </ul>
+        </section>
+        <section class="note">
+          <h3>現在の状態</h3>
+          <div class="pill-row">
+            <span class="pill">フォーム入力</span>
+            <span class="pill">Redmine 連携</span>
+            <span class="pill">VM 自動化準備</span>
+          </div>
+        </section>
+      </aside>
+    </div>
+  </main>
+</body>
+</html>

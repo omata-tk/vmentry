@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ja">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>VM Entry Login</title>
+	<style>
+		body { margin: 0; min-height: 100vh; display: grid; place-items: center; font-family: "Hiragino Sans", "Yu Gothic", "Noto Sans JP", sans-serif; background: radial-gradient(circle at top left, #d9f99d, #dbeafe 46%, #f8fafc); color: #0f172a; }
+		.panel { width: min(460px, 92vw); border-radius: 24px; background: rgba(255,255,255,.9); border: 1px solid rgba(148,163,184,.3); box-shadow: 0 24px 60px rgba(15,23,42,.12); padding: 24px; }
+		h1 { margin: 0; font-size: 1.6rem; }
+		p { color: #475569; line-height: 1.7; }
+		label { display: block; margin: 14px 0 6px; font-weight: 700; font-size: .9rem; }
+		input { width: 100%; box-sizing: border-box; border: 1px solid #cbd5e1; border-radius: 12px; padding: 12px 14px; font: inherit; }
+		button { margin-top: 16px; width: 100%; border: 0; border-radius: 12px; padding: 12px 14px; font: inherit; font-weight: 800; color: #fff; background: linear-gradient(135deg, #0f766e, #2563eb); cursor: pointer; }
+		.error { margin-top: 12px; border-radius: 12px; padding: 10px 12px; background: rgba(180,83,9,.1); border: 1px solid rgba(180,83,9,.25); color: #b45309; font-weight: 700; }
+	</style>
+</head>
+<body>
+	<main class="panel">
+		<h1>VM Entry ログイン</h1>
+		<p>APIキーを入力してください。認証に成功すると登録フォームへ移動します。</p>
+		<form method="post">
+			<label for="api_key">APIキー</label>
+			<input id="api_key" name="api_key" type="password" required autofocus>
+			<button type="submit">ログイン</button>
+		</form>
+		{% if error %}<div class="error">{{ error }}</div>{% endif %}
+	</main>
+</body>
+</html>

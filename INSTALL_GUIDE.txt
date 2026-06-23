@@ -1,0 +1,129 @@
+VM Entry インストール手順 / 利用開始ガイド
+=========================================
+
+このファイルは、Windows Server に VM Entry を導入して利用開始するまでの最短手順です。
+
+前提条件
+--------
+1. OS: Windows Server
+2. Python: 3.11 以上
+3. PowerShell: 5.1 以上（または PowerShell 7）
+4. ネットワーク: Redmine へ到達可能
+5. 必須環境変数を設定できる権限
+
+同梱物の考え方
+--------------
+- installer/ : インストール時だけ使用
+- scripts/windows/Start-WindowsVmEntry.ps1 : 運用時の起動
+- data/ : 初期状態は空（DBファイル未同梱）
+
+運用起動後に installer/ を削除してもアプリ起動には影響しません。
+ただし、再インストール・サービス再登録・同梱アンインストールスクリプト実行には installer/ が必要です。
+
+インストール手順（初回のみ）
+--------------------------
+1. 配布物を任意のフォルダへ展開
+2. PowerShell を管理者権限で起動
+3. 展開先へ移動
+4. 必須環境変数を設定
+
+   例:
+   $env:REDMINE_URL = "https://<your-redmine-host>"
+   $env:REDMINE_PROJECT_NAME = "環境情報"
+   $env:REDMINE_API_KEY = "<your-api-key>"
+
+5. インストーラを実行
+
+   .\installer\windows\windows_setup.ps1
+
+   Python が未導入の新規サーバーでは、次のように実行します（winget 利用）。
+
+   .\installer\windows\windows_setup.ps1 -InstallPythonIfMissing
+
+この処理で以下を実行します。
+- .venv 作成
+- 依存パッケージインストール
+- 初期DB作成
+- Redmine から初期データ同期（環境変数が設定されている場合）
+
+運用起動手順
+----------
+1. 同じ PowerShell セッションで必要なら REDMINE_API_KEY を設定
+
+   $env:REDMINE_API_KEY = "<your-api-key>"
+
+2. アプリを起動
+
+   .\scripts\windows\Start-WindowsVmEntry.ps1 -Host 0.0.0.0 -Port 5000
+
+3. ブラウザでアクセス
+
+   - 同一サーバーから: http://localhost:5000/login
+   - 別端末から: http://<WindowsサーバーのIPまたはホスト名>:5000/login
+
+停止方法
+------
+- 起動中の PowerShell で Ctrl + C
+
+サービス化の例（任意）
+--------------------
+運用で常駐が必要な場合は同梱スクリプトで Windows サービス化できます。
+
+1. サービス実行ユーザーで参照できる APIキーを設定
+
+   [Environment]::SetEnvironmentVariable("REDMINE_API_KEY", "<your-api-key>", "Machine")
+
+2. サービスを登録（必要なら登録後に自動起動）
+
+   .\installer\windows\install_windows_service.ps1 -ServiceName VmEntry -Port 5000 -StartAfterInstall
+
+3. サービス起動後のアクセス先
+
+   - 同一サーバーから: http://localhost:5000/login
+   - 別端末から: http://<WindowsサーバーのIPまたはホスト名>:5000/login
+
+4. 日常操作
+
+   Start-Service -Name VmEntry
+   Stop-Service -Name VmEntry
+   Restart-Service -Name VmEntry
+   Get-Service -Name VmEntry
+
+5. サービス削除
+
+   .\installer\windows\uninstall_windows_service.ps1 -ServiceName VmEntry
+
+アンインストール手順
+------------------
+アプリを完全削除する場合は次の順で実行してください。
+
+1. サービス運用中なら停止して削除
+
+   Stop-Service -Name VmEntry -ErrorAction SilentlyContinue
+   .\installer\windows\uninstall_windows_service.ps1 -ServiceName VmEntry
+
+2. Machine 環境変数の API キーを削除（必要に応じて URL/プロジェクト名も削除）
+
+   [Environment]::SetEnvironmentVariable("REDMINE_API_KEY", $null, "Machine")
+   [Environment]::SetEnvironmentVariable("REDMINE_URL", $null, "Machine")
+   [Environment]::SetEnvironmentVariable("REDMINE_PROJECT_NAME", $null, "Machine")
+
+3. 配備フォルダを削除
+
+   Remove-Item -Recurse -Force <配備フォルダパス>
+
+補足:
+- DB を残したい場合は、削除前に <配備フォルダ>\data\vm_entry.db を退避してください。
+- 手動起動中の PowerShell がある場合は先に Ctrl + C で停止してください。
+
+確認ポイント
+----------
+1. http://<host>:5000/login が表示される
+2. APIキーでログインできる
+3. フォーム画面が表示される
+
+トラブル時
+--------
+1. REDMINE_API_KEY 未設定: ログイン/連携で失敗します
+2. ポート 5000 使用中: Start-WindowsVmEntry.ps1 の -Port を変更
+3. 再インストール時: installer/windows/windows_setup.ps1 を再実行
