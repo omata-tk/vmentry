@@ -45,61 +45,53 @@ installer\windows\windows_setup.ps1
 scripts\windows\Start-WindowsVmEntry.ps1 -Host 0.0.0.0 -Port 5000
 ```
 
-## Windows Service 化
+## Windows Service 化 (NSSM)
 
-常駐運用する場合は、インストール済み環境でサービス登録スクリプトを実行します。
+このプロジェクトのサービス登録は NSSM を利用します。
+先に NSSM をインストールしてください。
 
-1. サービス実行ユーザーで参照できる `REDMINE_API_KEY` を設定します。
-2. サービスを登録します。
+### NSSM インストール例
 
-```powershell
-[Environment]::SetEnvironmentVariable("REDMINE_API_KEY", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "Machine")
-.\installer\windows\install_windows_service.ps1 -ServiceName VmEntry -Port 5000 -StartAfterInstall
-```
+powershell:
+winget install --id NSSM.NSSM -e
 
-よく使う操作:
+### サービス登録
 
-```powershell
+1. 必要に応じて Machine 環境変数を設定
+2. install_windows_service.ps1 を実行
+
+例: filesystem セッションを同時設定して登録
+
+powershell:
+.\installer\windows\install_windows_service.ps1 `
+  -ServiceName VmEntry `
+  -ConfigureMachineEnv `
+  -FlaskSecretKey "<LONG_RANDOM_SECRET>" `
+  -SessionType filesystem `
+  -SessionFileDir "C:\VM-Entry\data\flask_session" `
+  -SessionIdleMinutes 60 `
+  -SessionCookieSecure 1 `
+  -RedmineUrl "https://example.redmine.jp" `
+  -RedmineProjectName "環境情報" `
+  -RedmineApiKey "<YOUR_API_KEY>" `
+  -StartAfterInstall
+
+例: NSSM の場所を明示して登録
+
+powershell:
+.\installer\windows\install_windows_service.ps1 `
+  -ServiceName VmEntry `
+  -NssmExePath "C:\Users\Administrator\AppData\Local\Microsoft\WinGet\Links\nssm.exe"
+
+### よく使う操作
+
+powershell:
 Start-Service -Name VmEntry
 Stop-Service -Name VmEntry
 Restart-Service -Name VmEntry
 Get-Service -Name VmEntry
-```
 
-サービス削除:
+### サービス削除
 
-```powershell
+powershell:
 .\installer\windows\uninstall_windows_service.ps1 -ServiceName VmEntry
-```
-
-## アンインストール
-
-アプリを完全に削除する場合は、次の順で実行します。
-
-1. サービス運用中なら停止して削除
-
-```powershell
-Stop-Service -Name VmEntry -ErrorAction SilentlyContinue
-.\installer\windows\uninstall_windows_service.ps1 -ServiceName VmEntry
-```
-
-2. Machine 環境変数から API キーを削除（必要に応じて URL/プロジェクト名も削除）
-
-```powershell
-[Environment]::SetEnvironmentVariable("REDMINE_API_KEY", $null, "Machine")
-[Environment]::SetEnvironmentVariable("REDMINE_URL", $null, "Machine")
-[Environment]::SetEnvironmentVariable("REDMINE_PROJECT_NAME", $null, "Machine")
-```
-
-3. 配備フォルダを削除
-
-```powershell
-Remove-Item -Recurse -Force <配備フォルダパス>
-```
-
-補足: DB を残したい場合は `<配備フォルダ>\\data\\vm_entry.db` を退避してから削除してください。
-
-## 追加で必要になる可能性があるもの
-
-- Hyper-V 連携を実装する段階では、PowerShell の Hyper-V モジュール、WinRM、実行対象ホストへの管理権限が必要になります。
-- 画面を外部公開するなら、IIS のリバースプロキシや社内 LB の前段配置も検討してください。

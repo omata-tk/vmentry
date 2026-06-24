@@ -24,6 +24,7 @@ INCLUDE_PATHS = [
     'requirements.txt',
     'scripts',
     'services',
+    'templates', 
     'web',
 ]
 
@@ -39,6 +40,19 @@ EXCLUDE_SUFFIXES = {
     '.pyo',
 }
 
+
+def _copy_with_ps1_utf8_bom(src: str, dst: str) -> str:
+    src_path = Path(src)
+    dst_path = Path(dst)
+
+    if src_path.suffix.lower() == '.ps1':
+        text = src_path.read_text(encoding='utf-8')
+        dst_path.parent.mkdir(parents=True, exist_ok=True)
+        dst_path.write_text(text, encoding='utf-8-sig')
+        shutil.copystat(src_path, dst_path)
+        return str(dst_path)
+
+    return shutil.copy2(src, dst)
 
 def _ignore_filter(_: str, names: list[str]) -> set[str]:
     ignored = set()
@@ -64,10 +78,15 @@ def build_package() -> Path:
         src = PROJECT_ROOT / relative
         dst = package_root / relative
         if src.is_dir():
-            shutil.copytree(src, dst, ignore=_ignore_filter)
+            shutil.copytree(
+                src,
+                dst,
+                ignore=_ignore_filter,
+                copy_function=_copy_with_ps1_utf8_bom,
+            )
         else:
             dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)
+            _copy_with_ps1_utf8_bom(str(src), str(dst))
 
     data_dir = package_root / 'data'
     data_dir.mkdir(parents=True, exist_ok=True)

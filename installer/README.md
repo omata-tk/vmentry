@@ -24,3 +24,37 @@ $env:REDMINE_API_KEY = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 .
 installer\windows\windows_setup.ps1
 ```
+
+## サービス登録時に環境変数を同時設定する
+
+サービス実行時に参照される設定のうち、起動必須のものは Machine 環境変数として保持できます。
+install_windows_service.ps1 は -ConfigureMachineEnv 指定時に以下を設定できます。
+
+- FLASK_SECRET_KEY
+- SESSION_TYPE
+- SESSION_FILE_DIR
+- SESSION_IDLE_MINUTES
+- SESSION_COOKIE_SECURE
+- SESSION_REDIS_URL
+
+注意:
+- REDMINE_URL
+- REDMINE_PROJECT_NAME
+- REDMINE_API_KEY
+
+これら 3 項目は setup 時の bootstrap に使用します。
+windows_setup.ps1 実行時に指定し、bootstrap 完了後は redmine_url / project_name が DB に保存されます。
+
+### 例: filesystem セッション
+
+~~~powershell
+.\installer\windows\install_windows_service.ps1 `
+  -ServiceName VmEntry `
+  -ConfigureMachineEnv `
+  -FlaskSecretKey "<LONG_RANDOM_SECRET>" `
+  -SessionType filesystem `
+  -SessionFileDir "C:\VMEntry\data\flask_session" `
+  -SessionIdleMinutes 60 `
+  -SessionCookieSecure 1 `
+  -StartAfterInstall
+~~~

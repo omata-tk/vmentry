@@ -26,7 +26,7 @@
 	<main class="shell">
 		<div class="top">
 			<h1>管理画面</h1>
-			<div><a href="{{ url_for('logout') }}">ログアウト</a></div>
+			<div>{{ user_name }} | <a href="{{ url_for('logout') }}">ログアウト</a></div>
 		</div>
 		{% if message %}<div class="status ok">{{ message }}</div>{% endif %}
 		{% if error %}<div class="status ng">{{ error }}</div>{% endif %}

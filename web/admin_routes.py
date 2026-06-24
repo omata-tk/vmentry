@@ -217,4 +217,5 @@ def register_admin_routes(app):
             logs=db.get_recent_logs(20),
             message=message,
             error=error,
+            user_name=get_session_user_name(),
         )
