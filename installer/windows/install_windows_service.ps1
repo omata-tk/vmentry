@@ -17,8 +17,6 @@ param(
     [string]$SessionType = "filesystem",
     [string]$SessionFileDir = "",
     [int]$SessionIdleMinutes = 60,
-    [ValidateSet("0", "1")]
-    [string]$SessionCookieSecure = "1",
     [string]$SessionRedisUrl = "",
 
     # NSSM 実行ファイル。未指定時は PATH から解決
@@ -109,7 +107,7 @@ if ($ConfigureMachineEnv) {
     Set-MachineEnv -Name "SESSION_TYPE" -Value $SessionType -Required
     Set-MachineEnv -Name "SESSION_FILE_DIR" -Value $SessionFileDir
     Set-MachineEnv -Name "SESSION_IDLE_MINUTES" -Value $SessionIdleMinutes.ToString() -Required
-    Set-MachineEnv -Name "SESSION_COOKIE_SECURE" -Value $SessionCookieSecure -Required
+    Set-MachineEnv -Name "SESSION_COOKIE_SECURE" -Value "0" -Required
     Set-MachineEnv -Name "SESSION_REDIS_URL" -Value $SessionRedisUrl
 }
 

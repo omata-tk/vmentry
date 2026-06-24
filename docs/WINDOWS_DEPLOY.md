@@ -2,6 +2,10 @@
 
 このプロジェクトは Windows Server 上では `Flask` の開発サーバーではなく、`waitress` を使って起動する前提で準備しています。
 
+補足:
+waitress 単体では TLS 終端を行わないため、クライアント接続の HTTPS はサポートしません（HTTPのみ）。
+Redmine への外部通信は REDMINE_URL が https の場合に HTTPS になります。
+
 ## 必要なもの
 
 - Python 3.11 以上（未導入の場合は `winget` で自動導入可）
@@ -70,10 +74,6 @@ powershell:
   -SessionType filesystem `
   -SessionFileDir "C:\VM-Entry\data\flask_session" `
   -SessionIdleMinutes 60 `
-  -SessionCookieSecure 1 `
-  -RedmineUrl "https://example.redmine.jp" `
-  -RedmineProjectName "環境情報" `
-  -RedmineApiKey "<YOUR_API_KEY>" `
   -StartAfterInstall
 
 例: NSSM の場所を明示して登録

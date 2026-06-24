@@ -27,6 +27,11 @@ installer\windows\windows_setup.ps1
 
 ## サービス登録時に環境変数を同時設定する
 
+注意:
+クライアントから本アプリへの接続は HTTP のみサポートします。
+本構成は waitress 単体起動のため、HTTPS 待受は行いません。
+Redmine との通信は REDMINE_URL が https の場合に HTTPS で行われます。
+
 サービス実行時に参照される設定のうち、起動必須のものは Machine 環境変数として保持できます。
 install_windows_service.ps1 は -ConfigureMachineEnv 指定時に以下を設定できます。
 
@@ -34,7 +39,6 @@ install_windows_service.ps1 は -ConfigureMachineEnv 指定時に以下を設定
 - SESSION_TYPE
 - SESSION_FILE_DIR
 - SESSION_IDLE_MINUTES
-- SESSION_COOKIE_SECURE
 - SESSION_REDIS_URL
 
 注意:
@@ -55,6 +59,5 @@ windows_setup.ps1 実行時に指定し、bootstrap 完了後は redmine_url / p
   -SessionType filesystem `
   -SessionFileDir "C:\VMEntry\data\flask_session" `
   -SessionIdleMinutes 60 `
-  -SessionCookieSecure 1 `
   -StartAfterInstall
 ~~~
