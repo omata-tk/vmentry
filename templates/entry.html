@@ -110,8 +110,13 @@
 					<div class="status success"><strong>入力内容の確認</strong>内容を確認して問題なければ「この内容で作成」を押してください。</div>
 					<form method="post">
 						{% for key, value in values.items() %}
+            {% if key != 'usage' %}
 						<input type="hidden" name="{{ key }}" value="{{ value }}">
+            {% endif %}
 						{% endfor %}
+            {% for usage_value in usage_selected %}
+            <input type="hidden" name="usage" value="{{ usage_value }}">
+            {% endfor %}
 						<input type="hidden" name="confirmed_ip" value="{{ confirmed_ip }}">
 						<div class="confirm-sheet">
 							<dl class="confirm-list">
@@ -120,7 +125,7 @@
                   <dt>{{ field_label }}</dt>
                   <dd>
                   {%- if field_key == 'usage' -%}
-                    {%- for v in usage_selected -%}{{- dict(usage_options)[v] -}}{%- if not loop.last %}, {% endif -%}{%- else -%}-{%- endfor -%}
+                    {%- for v in usage_selected -%}{{- dict(usage_options).get(v, v) -}}{%- if not loop.last %}, {% endif -%}{%- else -%}-{%- endfor -%}
                   {%- else -%}
                     {{ confirm_display_values[field_key] or '-' }}
                   {%- endif -%}

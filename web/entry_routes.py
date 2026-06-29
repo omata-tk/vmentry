@@ -76,13 +76,9 @@ def build_values(form_data):
     values = {}
     for key, default in defaults.items():
         if key == "usage" and hasattr(form_data, "getlist"):
-            checked_values = [
-                item.strip()
-                for item in form_data.getlist("usage")
-                if isinstance(item, str) and item.strip()
-            ]
+            checked_values = extract_usage_values(form_data)
             if checked_values:
-                values[key] = ", ".join(checked_values)
+                values[key] = "\n".join(checked_values)
                 continue
         values[key] = form_data.get(key, default)
 
@@ -104,6 +100,41 @@ def build_confirm_display_values(values):
     display_values["os_value"] = os_label_map.get(values.get("os_value", ""), values.get("os_value", ""))
     display_values["vhost_ip"] = vhost_label_map.get(values.get("vhost_ip", ""), values.get("vhost_ip", ""))
     return display_values
+
+
+def extract_usage_values(form_data):
+    usage_values = []
+    option_values = {value for value, _ in CURRENT_USAGE_OPTIONS}
+
+    def _append_usage(raw_value):
+        if raw_value is None:
+            return
+        text = str(raw_value).strip()
+        if not text:
+            return
+
+        # 旧確認画面の hidden では複数値がカンマ結合されるため、候補値に無い場合のみ分割する。
+        if text in option_values or "," not in text:
+            usage_values.append(text)
+            return
+
+        usage_values.extend(item.strip() for item in text.split(",") if item.strip())
+
+    if hasattr(form_data, "getlist"):
+        for item in form_data.getlist("usage"):
+            _append_usage(item)
+    elif hasattr(form_data, "get"):
+        _append_usage(form_data.get("usage"))
+
+    # 重複を除去しつつ順序を維持する。
+    seen = set()
+    deduped = []
+    for value in usage_values:
+        if value in seen:
+            continue
+        seen.add(value)
+        deduped.append(value)
+    return deduped
 
 
 def build_ticket_data(form_data):
@@ -160,16 +191,7 @@ def build_ticket_data(form_data):
         else:
             assigned_to_id = CURRENT_ASSIGNEE_NAME_TO_ID[assignee_name]
 
-    usage_values = []
-    if hasattr(form_data, "getlist"):
-        usage_values = [
-            item.strip()
-            for item in form_data.getlist("usage")
-            if isinstance(item, str) and item.strip()
-        ]
-    if not usage_values:
-        usage_raw = (form_data.get("usage") or "").strip()
-        usage_values = [item.strip() for item in usage_raw.split(",") if item.strip()]
+    usage_values = extract_usage_values(form_data)
 
     ticket_data = {
         "target_subnet": target_subnet,
@@ -351,7 +373,7 @@ def register_entry_routes(app):
             vhost_options=sorted(CURRENT_VHOST_IP_DISPLAY_MAP.items(), key=lambda item: item[1]),
             os_options=CURRENT_OS_OPTIONS,
             usage_options=CURRENT_USAGE_OPTIONS,
-            usage_selected={item.strip() for item in (values.get("usage") or "").split(",") if item.strip()},
+            usage_selected=extract_usage_values(form_data) if request.method == "POST" else extract_usage_values(values),
             assignee_names=sorted(CURRENT_ASSIGNEE_NAME_TO_ID.keys()),
             template_options=CURRENT_VM_TEMPLATE_OPTIONS,
         )
