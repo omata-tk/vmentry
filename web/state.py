@@ -11,6 +11,9 @@ CURRENT_VHOST_IP_DISPLAY_MAP = dict(db.get_vhost_ip_display_map())
 DEFAULT_VM_TEMPLATE_OPTIONS = list(db.get_master_options("vm_template"))
 CURRENT_VM_TEMPLATE_OPTIONS = list(DEFAULT_VM_TEMPLATE_OPTIONS)
 
+DEFAULT_VM_SWITCH_OPTIONS = list(db.get_master_options("vm_switch"))
+CURRENT_VM_SWITCH_OPTIONS = list(DEFAULT_VM_SWITCH_OPTIONS)
+
 DEFAULT_SUBNET_OPTIONS = list(db.get_master_options("subnet"))
 CURRENT_SUBNET_OPTIONS = list(DEFAULT_SUBNET_OPTIONS)
 

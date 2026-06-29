@@ -1,7 +1,9 @@
-from flask import redirect, render_template, request, url_for
+import json
+
+from flask import jsonify, redirect, render_template, request, url_for
 
 from core import db
-from services import redmine
+from services import hyperv, redmine
 from web.auth_routes import get_session_api_key, get_session_user_name, is_admin_session
 from web.state import (
     CURRENT_ASSIGNEE_NAME_TO_ID,
@@ -9,6 +11,7 @@ from web.state import (
     CURRENT_SUBNET_OPTIONS,
     CURRENT_USAGE_OPTIONS,
     CURRENT_VHOST_IP_DISPLAY_MAP,
+    CURRENT_VM_SWITCH_OPTIONS,
     CURRENT_VM_TEMPLATE_OPTIONS,
 )
 
@@ -33,10 +36,15 @@ CONFIRM_FIELDS = [
     ("initial_builder", "初期構築担当者"),
     ("notes", "特記事項"),
     ("vm_template", "VMテンプレート"),
-    ("memory", "メモリ(GB)"),
-    ("disk", "ディスク(GB)"),
-    ("cpu", "CPU数"),
-    ("switch", "仮想スイッチ"),
+    ("vcpu_count", "仮想プロセッサ カウント"),
+    ("enable_nested_virtualization", "入れ子になった仮想化"),
+    ("startup_memory", "起動メモリ"),
+    ("memory_unit", "メモリ単位"),
+    ("use_dynamic_memory", "動的メモリ"),
+    ("virtual_switch", "仮想スイッチ"),
+    ("manual_disks_json", "ストレージ構成"),
+    ("os_install_mode", "OSインストール方法"),
+    ("os_iso_path", "OS ISO パス"),
 ]
 
 
@@ -63,10 +71,15 @@ def form_defaults():
         "notes": "",
         "deploy_type": "template",
         "vm_template": "",
-        "memory": "",
-        "disk": "",
-        "cpu": "",
-        "switch": "",
+        "vcpu_count": "",
+        "enable_nested_virtualization": "",
+        "startup_memory": "",
+        "memory_unit": "GB",
+        "use_dynamic_memory": "",
+        "virtual_switch": "",
+        "manual_disks_json": "",
+        "os_install_mode": "later",
+        "os_iso_path": "",
         "debug_ticket_only": "",
     }
 
@@ -97,9 +110,77 @@ def build_confirm_display_values(values):
     display_values = dict(values)
     os_label_map = {value: label for value, label in CURRENT_OS_OPTIONS}
     vhost_label_map = dict(CURRENT_VHOST_IP_DISPLAY_MAP)
+    vm_switch_label_map = {value: label for value, label in CURRENT_VM_SWITCH_OPTIONS}
     display_values["os_value"] = os_label_map.get(values.get("os_value", ""), values.get("os_value", ""))
     display_values["vhost_ip"] = vhost_label_map.get(values.get("vhost_ip", ""), values.get("vhost_ip", ""))
+    display_values["virtual_switch"] = vm_switch_label_map.get(
+        values.get("virtual_switch", ""), values.get("virtual_switch", "")
+    )
+    display_values["enable_nested_virtualization"] = "有効" if values.get("enable_nested_virtualization") == "on" else "無効"
+    display_values["use_dynamic_memory"] = "有効" if values.get("use_dynamic_memory") == "on" else "無効"
+    display_values["os_install_mode"] = (
+        "後でオペレーティングシステムをインストールする"
+        if values.get("os_install_mode") == "later"
+        else "画像ファイル（.iso）からオペレーティングシステムをインストールする"
+    )
+
+    startup_memory = (values.get("startup_memory") or "").strip()
+    memory_unit = (values.get("memory_unit") or "").strip()
+    if startup_memory:
+        display_values["startup_memory"] = f"{startup_memory} {memory_unit}".strip()
+
+    display_values["manual_disks_json"] = _build_storage_confirm_text(values.get("manual_disks_json", ""))
     return display_values
+
+
+def parse_manual_disks_json(raw_value):
+    text = (raw_value or "").strip()
+    if not text:
+        return [], None
+
+    try:
+        parsed = json.loads(text)
+    except (TypeError, ValueError):
+        return [], "ストレージ構成の形式が不正です。"
+
+    if not isinstance(parsed, list):
+        return [], "ストレージ構成の形式が不正です。"
+
+    disks = []
+    for idx, item in enumerate(parsed, start=1):
+        if not isinstance(item, dict):
+            return [], "ストレージ構成の形式が不正です。"
+        disk_type = (item.get("type") or "empty").strip()
+        if disk_type not in ("empty", "existing"):
+            return [], "ストレージ構成の形式が不正です。"
+
+        size_gb = str(item.get("size_gb") or "").strip()
+        path = str(item.get("path") or "").strip()
+        disks.append(
+            {
+                "index": idx,
+                "type": disk_type,
+                "size_gb": size_gb,
+                "path": path,
+            }
+        )
+    return disks, None
+
+
+def _build_storage_confirm_text(raw_value):
+    disks, parse_error = parse_manual_disks_json(raw_value)
+    if parse_error:
+        return "-"
+    if not disks:
+        return "-"
+
+    lines = []
+    for disk in disks:
+        if disk["type"] == "existing":
+            lines.append(f"新しいディスク{disk['index']}: 既存VHD ({disk['path'] or '-'})")
+        else:
+            lines.append(f"新しいディスク{disk['index']}: 空ディスク ({disk['size_gb'] or '-'} GB)")
+    return "\n".join(lines)
 
 
 def extract_usage_values(form_data):
@@ -161,9 +242,13 @@ def build_ticket_data(form_data):
     deploy_type = (form_data.get("deploy_type") or "").strip()
     vm_template = (form_data.get("vm_template") or "").strip()
 
-    memory = (form_data.get("memory") or "").strip()
-    disk = (form_data.get("disk") or "").strip()
-    cpu = (form_data.get("cpu") or "").strip()
+    vcpu_count = (form_data.get("vcpu_count") or "").strip()
+    startup_memory = (form_data.get("startup_memory") or "").strip()
+    memory_unit = (form_data.get("memory_unit") or "").strip()
+    virtual_switch = (form_data.get("virtual_switch") or "").strip()
+    os_install_mode = (form_data.get("os_install_mode") or "").strip() or "later"
+    os_iso_path = (form_data.get("os_iso_path") or "").strip()
+    manual_disks_raw = (form_data.get("manual_disks_json") or "").strip()
 
     if deploy_type and deploy_type not in ("template", "manual"):
         errors.append("作成方法が不正です。")
@@ -173,15 +258,48 @@ def build_ticket_data(form_data):
             if not vm_template:
                 errors.append("VMテンプレートを選択してください。")
         elif deploy_type == "manual":
-            if not memory or not disk or not cpu:
-                errors.append("手動作成の場合はメモリ・ディスク・CPUが必須です。")
+            if not vcpu_count or not startup_memory:
+                errors.append("手動作成の場合は仮想プロセッサ カウントと起動メモリが必須です。")
             else:
                 try:
-                    int(memory)
-                    int(disk)
-                    int(cpu)
+                    if int(vcpu_count) <= 0 or int(startup_memory) <= 0:
+                        errors.append("仮想プロセッサ カウントと起動メモリは1以上で入力してください。")
                 except ValueError:
-                    errors.append("メモリ・ディスク・CPUは数値で入力してください。")
+                    errors.append("仮想プロセッサ カウントと起動メモリは数値で入力してください。")
+
+            if memory_unit not in ("GB", "MB"):
+                errors.append("メモリ単位はGBまたはMBを選択してください。")
+
+            switch_values = {value for value, _ in CURRENT_VM_SWITCH_OPTIONS}
+            if not virtual_switch:
+                errors.append("仮想スイッチを選択してください。")
+            elif switch_values and virtual_switch not in switch_values:
+                errors.append("仮想スイッチは候補から選択してください。")
+
+            manual_disks, parse_error = parse_manual_disks_json(manual_disks_raw)
+            if parse_error:
+                errors.append(parse_error)
+            elif not manual_disks:
+                errors.append("ストレージは最低1件設定してください。")
+            else:
+                for disk in manual_disks:
+                    if disk["type"] == "existing":
+                        if not disk["path"]:
+                            errors.append(f"新しいディスク{disk['index']} のパスを入力してください。")
+                    else:
+                        if not disk["size_gb"]:
+                            errors.append(f"新しいディスク{disk['index']} のサイズ（GB）を入力してください。")
+                            continue
+                        try:
+                            if int(disk["size_gb"]) <= 0:
+                                errors.append(f"新しいディスク{disk['index']} のサイズ（GB）は1以上で入力してください。")
+                        except ValueError:
+                            errors.append(f"新しいディスク{disk['index']} のサイズ（GB）は数値で入力してください。")
+
+            if os_install_mode not in ("later", "iso"):
+                errors.append("オペレーティングシステムの設定が不正です。")
+            elif os_install_mode == "iso" and not os_iso_path:
+                errors.append("ISOインストールを選択した場合はISOファイルのパスを入力してください。")
 
     assignee_name = (form_data.get("assignee_name") or "").strip()
     assigned_to_id = None
@@ -217,6 +335,21 @@ def build_ticket_data(form_data):
             {"id": 98, "value": (form_data.get("initial_builder") or "").strip()},
             {"id": 35, "value": (form_data.get("notes") or "").strip()},
         ],
+        "vm_config": {
+            "deploy_type": deploy_type,
+            "vm_template": vm_template,
+            "manual": {
+                "vcpu_count": vcpu_count,
+                "enable_nested_virtualization": (form_data.get("enable_nested_virtualization") or "").strip() == "on",
+                "startup_memory": startup_memory,
+                "memory_unit": memory_unit,
+                "use_dynamic_memory": (form_data.get("use_dynamic_memory") or "").strip() == "on",
+                "virtual_switch": virtual_switch,
+                "disks": parse_manual_disks_json(manual_disks_raw)[0],
+                "os_install_mode": os_install_mode,
+                "os_iso_path": os_iso_path,
+            },
+        },
         "debug_ticket_only": debug_ticket_only,
     }
     return ticket_data, errors
@@ -229,6 +362,54 @@ def build_ticket_url(ticket_id):
     if not base:
         return None
     return f"{base}/issues/{ticket_id}"
+
+
+def _normalize_x_drive_path(raw_path):
+    text = (raw_path or "").strip().replace("/", "\\")
+    if not text:
+        return "X:\\"
+
+    if text.lower() == "x:":
+        return "X:\\"
+
+    if not text.lower().startswith("x:\\"):
+        return None
+
+    return text
+
+
+def _configured_hyperv_hosts():
+    settings = db.get_all_settings()
+    hosts = []
+    for idx in range(1, 4):
+        ip = (settings.get(f"hyperv_host{idx}_ip") or "").strip()
+        user = (settings.get(f"hyperv_host{idx}_user") or "").strip()
+        password = db._decrypt_password(settings.get(f"hyperv_host{idx}_password") or "")
+        hosts.append(
+            {
+                "index": idx,
+                "ip": ip,
+                "user": user,
+                "password": password,
+            }
+        )
+    return hosts
+
+
+def _filter_entries_for_browse(entries, browse_kind):
+    if browse_kind == "iso":
+        allowed_ext = {".iso"}
+    else:
+        allowed_ext = {".vhd", ".vhdx"}
+
+    filtered = []
+    for item in entries:
+        if item.get("is_dir"):
+            filtered.append(item)
+            continue
+        if item.get("ext") in allowed_ext:
+            filtered.append(item)
+    return filtered
 
 
 def register_entry_routes(app):
@@ -376,4 +557,64 @@ def register_entry_routes(app):
             usage_selected=extract_usage_values(form_data) if request.method == "POST" else extract_usage_values(values),
             assignee_names=sorted(CURRENT_ASSIGNEE_NAME_TO_ID.keys()),
             template_options=CURRENT_VM_TEMPLATE_OPTIONS,
+            vm_switch_options=CURRENT_VM_SWITCH_OPTIONS,
         )
+
+    @app.route("/entry/host-browse", methods=["GET"])
+    def entry_host_browse():
+        if not (get_session_api_key() or is_admin_session()):
+            return jsonify({"ok": False, "message": "認証が必要です。"}), 401
+
+        browse_kind = (request.args.get("kind") or "").strip().lower()
+        if browse_kind not in ("iso", "vhd"):
+            return jsonify({"ok": False, "message": "参照種別が不正です。"}), 400
+
+        normalized_path = _normalize_x_drive_path(request.args.get("path") or "")
+        if normalized_path is None:
+            return jsonify({"ok": False, "message": "Xドライブ配下のパスのみ参照できます。"}), 400
+
+        host_errors = []
+        any_host_configured = False
+
+        for host in _configured_hyperv_hosts():
+            host_label = f"ホスト{host['index']}"
+            if not host["ip"] or not host["user"] or not host["password"]:
+                host_errors.append(f"{host_label}: 接続設定が不足しています。")
+                continue
+
+            any_host_configured = True
+            try:
+                browse_result = hyperv.browse_host_path(
+                    host["ip"],
+                    host["user"],
+                    host["password"],
+                    normalized_path,
+                )
+                entries = _filter_entries_for_browse(browse_result.get("entries", []), browse_kind)
+
+                warning = ""
+                if host_errors:
+                    warning = "先行ホスト接続失敗: " + " ".join(host_errors)
+
+                return jsonify(
+                    {
+                        "ok": True,
+                        "host": host_label,
+                        "host_ip": host["ip"],
+                        "current_path": browse_result.get("current_path", normalized_path),
+                        "parent_path": browse_result.get("parent_path", normalized_path),
+                        "entries": entries,
+                        "warning": warning,
+                    }
+                )
+            except Exception as exc:
+                host_errors.append(f"{host_label}: {str(exc)}")
+
+        if not any_host_configured:
+            message = "管理者設定のホスト1〜3に接続情報がありません。"
+        else:
+            message = "ホストサーバに接続できませんでした。"
+            if host_errors:
+                message = f"{message} " + " ".join(host_errors)
+
+        return jsonify({"ok": False, "message": message}), 503

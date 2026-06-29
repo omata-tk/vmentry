@@ -55,8 +55,36 @@
     .check-list { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px 12px; border: 1px solid #cbd5e1; border-radius: 15px; background: #fff; padding: 10px 12px; }
     .check-item { display: flex; align-items: center; gap: 8px; color: #0f172a; font-size: .9rem; }
     .check-item input { width: auto; }
+    .manual-card { border: 1px solid #dbe3ee; border-radius: 15px; background: #f8fafc; padding: 14px; margin-bottom: 14px; }
+    .manual-subtitle { margin: 0 0 10px; font-size: .9rem; color: #1e293b; }
+    .manual-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 12px; }
+    .manual-grid .field.full { margin-top: 0; }
+    .checkbox-row { display: flex; align-items: center; gap: 8px; font-size: .9rem; color: #0f172a; }
+    .checkbox-row input { width: auto; }
+    .radio-group { display: grid; gap: 10px; }
+    .radio-item { display: flex; align-items: center; gap: 8px; font-size: .9rem; color: #0f172a; }
+    .radio-item input { width: auto; }
+    .path-picker { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
+    .small-button { border: 1px solid #94a3b8; border-radius: 10px; background: #fff; color: #334155; font: inherit; font-size: .82rem; font-weight: 700; padding: 8px 12px; cursor: pointer; }
+    .small-button:hover { background: #f1f5f9; }
+    .disk-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+    .disk-title { margin: 0; font-size: .88rem; color: #1e293b; }
+    .browser-modal { position: fixed; inset: 0; background: rgba(15,23,42,.45); display: flex; align-items: center; justify-content: center; padding: 20px; z-index: 50; }
+    .browser-modal[hidden] { display: none; }
+    .browser-panel { width: min(860px, 96vw); max-height: 85vh; overflow: auto; border-radius: 18px; background: #fff; border: 1px solid #dbe3ee; box-shadow: 0 24px 60px rgba(15,23,42,.24); padding: 16px; }
+    .browser-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+    .browser-actions { display: flex; align-items: center; gap: 8px; }
+    .browser-path { font-size: .84rem; color: #334155; word-break: break-all; margin-bottom: 8px; }
+    .browser-message { font-size: .82rem; border-radius: 10px; padding: 8px 10px; margin-bottom: 10px; display: none; }
+    .browser-message.error { display: block; background: rgba(180,83,9,.1); border: 1px solid rgba(180,83,9,.2); color: #b45309; }
+    .browser-message.info { display: block; background: rgba(22,101,52,.1); border: 1px solid rgba(22,101,52,.2); color: #166534; }
+    .browser-list { border: 1px solid #dbe3ee; border-radius: 12px; overflow: hidden; }
+    .browser-row { width: 100%; border: 0; border-bottom: 1px solid #e2e8f0; background: #fff; display: flex; justify-content: space-between; gap: 10px; align-items: center; padding: 10px 12px; font: inherit; text-align: left; cursor: pointer; }
+    .browser-row:last-child { border-bottom: 0; }
+    .browser-row:hover { background: #f8fafc; }
+    .browser-kind { color: #64748b; font-size: .78rem; }
     @media (max-width: 960px) { .layout, .hero-grid, .form-grid { grid-template-columns: 1fr; } }
-		@media (max-width: 960px) { .check-list { grid-template-columns: 1fr; } }
+  		@media (max-width: 960px) { .check-list, .manual-grid, .path-picker { grid-template-columns: 1fr; } }
 		@media (max-width: 720px) { .confirm-list { grid-template-columns: 1fr; } }
     @media (max-width: 720px) { .shell { padding: 16px 12px 28px; } .hero, .card-body { padding: 18px; } .actions { justify-content: stretch; } .button { width: 100%; } }
   </style>
@@ -173,14 +201,87 @@
         </div>
         <div class="field"><label for="deploy_type">作成方法<span class="required-mark">*</span></label><select id="deploy_type" name="deploy_type" required><option value="template" {% if values.deploy_type == "template" %}selected{% endif %}>テンプレートから作成</option><option value="manual" {% if values.deploy_type == "manual" %}selected{% endif %}>手動作成</option></select></div>
         <div id="deploy-dependent-fields">
-          <div class="field" id="template-field"><label for="vm_template">VMテンプレート</label><select id="vm_template" name="vm_template"><option value="">未選択</option>{% for value, label in template_options %}<option value="{{ value }}" {% if values.vm_template == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
+          <div class="field" id="template-field"><label for="vm_template">VMテンプレート</label><select id="vm_template" name="vm_template" required><option value="">未選択</option>{% for value, label in template_options %}<option value="{{ value }}" {% if values.vm_template == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
           <div id="manual-fields">
-            <div class="field"><label>メモリ(GB)</label><input type="number" name="memory" value="{{ values.memory or 2 }}"></div>
-            <div class="field"><label>ディスク(GB)</label><input type="number" name="disk" value="{{ values.disk or 40 }}"></div>
-            <div class="field"><label>CPU数</label><input type="number" name="cpu" value="{{ values.cpu or 2 }}"></div>
-            <div class="field">
-              <label>仮想スイッチ</label>
-              <input type="text" name="switch" value="{{ values.switch or 'Default Switch' }}">
+            <div class="manual-card">
+              <h3 class="manual-subtitle">仮想プロセッサ</h3>
+              <div class="manual-grid">
+                <div class="field">
+                  <label for="vcpu_count">カウント</label>
+                  <input id="vcpu_count" name="vcpu_count" value="{{ values.vcpu_count }}" inputmode="numeric" pattern="[0-9]*" required>
+                </div>
+                <div class="field full">
+                  <label class="checkbox-row" title="仮想マシン内で仮想マシンを使用する場合はチェックを入れる">
+                    <input type="checkbox" id="enable_nested_virtualization" name="enable_nested_virtualization" {% if values.enable_nested_virtualization %}checked{% endif %}>
+                    入れ子になった仮想化を有効にする。
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <div class="manual-card">
+              <h3 class="manual-subtitle">メモリ</h3>
+              <div class="manual-grid">
+                <div class="field">
+                  <label for="startup_memory">起動メモリ</label>
+                  <input id="startup_memory" name="startup_memory" value="{{ values.startup_memory }}" inputmode="numeric" pattern="[0-9]*" required>
+                </div>
+                <div class="field">
+                  <label for="memory_unit">サイズの単位</label>
+                  <select id="memory_unit" name="memory_unit" required>
+                    <option value="GB" {% if values.memory_unit == 'GB' %}selected{% endif %}>GB</option>
+                    <option value="MB" {% if values.memory_unit == 'MB' %}selected{% endif %}>MB</option>
+                  </select>
+                </div>
+                <div class="field full">
+                  <label class="checkbox-row" title="原則使用しない">
+                    <input type="checkbox" id="use_dynamic_memory" name="use_dynamic_memory" {% if values.use_dynamic_memory %}checked{% endif %}>
+                    動的メモリを使用する
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <div class="manual-card">
+              <h3 class="manual-subtitle">ネットワーク</h3>
+              <div class="field">
+                <label for="virtual_switch">仮想スイッチ</label>
+                <select id="virtual_switch" name="virtual_switch" required>
+                  <option value="">未選択</option>
+                  {% for value, label in vm_switch_options %}
+                  <option value="{{ value }}" {% if values.virtual_switch == value %}selected{% endif %}>{{ label }}</option>
+                  {% endfor %}
+                </select>
+                <div class="help">表示形式: ホスト名|仮想スイッチ</div>
+              </div>
+            </div>
+
+            <div class="manual-card">
+              <h3 class="manual-subtitle">ストレージ</h3>
+              <input type="hidden" id="manual_disks_json" name="manual_disks_json" value="{{ values.manual_disks_json }}">
+              <div id="storage-disks"></div>
+              <button class="small-button" type="button" id="add-disk-button">追加</button>
+            </div>
+
+            <div class="manual-card">
+              <h3 class="manual-subtitle">オペレーティングシステム</h3>
+              <div class="radio-group">
+                <label class="radio-item">
+                  <input type="radio" name="os_install_mode" value="later" {% if values.os_install_mode != 'iso' %}checked{% endif %}>
+                  後でオペレーティングシステムをインストールする
+                </label>
+                <label class="radio-item">
+                  <input type="radio" name="os_install_mode" value="iso" {% if values.os_install_mode == 'iso' %}checked{% endif %}>
+                  画像ファイル（.iso）からオペレーティングシステムをインストールする
+                </label>
+              </div>
+              <div class="field" id="iso-path-field" style="margin-top: 10px;">
+                <label for="os_iso_path">パス</label>
+                <div class="path-picker">
+                  <input id="os_iso_path" name="os_iso_path" value="{{ values.os_iso_path }}">
+                  <button class="small-button" type="button" id="browse-iso-button">参照</button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -218,6 +319,20 @@
       </aside>
     </div>
   </main>
+  <div id="host-path-browser" class="browser-modal" hidden>
+    <div class="browser-panel" role="dialog" aria-modal="true" aria-label="ホストXドライブ参照">
+      <div class="browser-top">
+        <strong>ホストXドライブ参照</strong>
+        <div class="browser-actions">
+          <button class="small-button" type="button" id="browser-up">上へ</button>
+          <button class="small-button" type="button" id="browser-close">閉じる</button>
+        </div>
+      </div>
+      <div id="browser-path" class="browser-path">X:\</div>
+      <div id="browser-message" class="browser-message"></div>
+      <div id="browser-list" class="browser-list"></div>
+    </div>
+  </div>
   <script>
     (function () {
       var deployType = document.getElementById('deploy_type');
@@ -255,7 +370,372 @@
         setSectionVisibility(manualFields, !isTemplate);
       }
 
+      function onlyDigits(value) {
+        return String(value || '').replace(/\D+/g, '');
+      }
+
+      function parseInitialDisks() {
+        var manualDisksInput = document.getElementById('manual_disks_json');
+        if (!manualDisksInput || !manualDisksInput.value) {
+          return [];
+        }
+        try {
+          var parsed = JSON.parse(manualDisksInput.value);
+          if (!Array.isArray(parsed)) {
+            return [];
+          }
+          return parsed.map(function (item) {
+            return {
+              type: item && item.type === 'existing' ? 'existing' : 'empty',
+              size_gb: onlyDigits(item && item.size_gb ? item.size_gb : '100') || '100',
+              path: item && item.path ? String(item.path) : ''
+            };
+          });
+        } catch (e) {
+          return [];
+        }
+      }
+
+      var disks = parseInitialDisks();
+      if (!disks.length) {
+        disks = [{ type: 'empty', size_gb: '100', path: '' }];
+      }
+
+      var storageContainer = document.getElementById('storage-disks');
+      var manualDisksInput = document.getElementById('manual_disks_json');
+      var addDiskButton = document.getElementById('add-disk-button');
+      var browserModal = document.getElementById('host-path-browser');
+      var browserList = document.getElementById('browser-list');
+      var browserPath = document.getElementById('browser-path');
+      var browserMessage = document.getElementById('browser-message');
+      var browserUp = document.getElementById('browser-up');
+      var browserClose = document.getElementById('browser-close');
+
+      var browserState = {
+        kind: 'vhd',
+        currentPath: 'X:\\',
+        parentPath: 'X:\\',
+        onSelect: null
+      };
+
+      function syncManualDisks() {
+        if (!manualDisksInput) {
+          return;
+        }
+        manualDisksInput.value = JSON.stringify(disks);
+      }
+
+      function setBrowserMessage(text, type) {
+        if (!browserMessage) {
+          return;
+        }
+        browserMessage.className = 'browser-message';
+        if (!text) {
+          browserMessage.textContent = '';
+          return;
+        }
+        browserMessage.classList.add(type || 'info');
+        browserMessage.textContent = text;
+      }
+
+      function closeBrowserModal() {
+        if (browserModal) {
+          browserModal.hidden = true;
+        }
+      }
+
+      function renderBrowserEntries(entries) {
+        if (!browserList) {
+          return;
+        }
+        browserList.innerHTML = '';
+        if (!entries.length) {
+          var empty = document.createElement('div');
+          empty.style.padding = '12px';
+          empty.style.color = '#64748b';
+          empty.textContent = '該当ファイルがありません。';
+          browserList.appendChild(empty);
+          return;
+        }
+
+        entries.forEach(function (entry) {
+          var row = document.createElement('button');
+          row.type = 'button';
+          row.className = 'browser-row';
+          var name = document.createElement('span');
+          name.textContent = entry.name;
+          var kind = document.createElement('span');
+          kind.className = 'browser-kind';
+          kind.textContent = entry.is_dir ? 'フォルダ' : 'ファイル';
+          row.appendChild(name);
+          row.appendChild(kind);
+
+          row.addEventListener('click', function () {
+            if (entry.is_dir) {
+              loadBrowserPath(entry.path);
+              return;
+            }
+            if (browserState.onSelect) {
+              browserState.onSelect(entry.path);
+            }
+            closeBrowserModal();
+          });
+          browserList.appendChild(row);
+        });
+      }
+
+      function loadBrowserPath(pathValue) {
+        var targetPath = pathValue || 'X:\\';
+        setBrowserMessage('ホストへ接続中...', 'info');
+        if (browserPath) {
+          browserPath.textContent = targetPath;
+        }
+        fetch('/entry/host-browse?kind=' + encodeURIComponent(browserState.kind) + '&path=' + encodeURIComponent(targetPath))
+          .then(function (response) {
+            return response.json().then(function (json) {
+              return { ok: response.ok, body: json };
+            });
+          })
+          .then(function (result) {
+            if (!result.ok || !result.body.ok) {
+              setBrowserMessage((result.body && result.body.message) || '接続に失敗しました。', 'error');
+              renderBrowserEntries([]);
+              return;
+            }
+
+            browserState.currentPath = result.body.current_path || targetPath;
+            browserState.parentPath = result.body.parent_path || browserState.currentPath;
+            if (browserPath) {
+              browserPath.textContent = browserState.currentPath + ' (' + (result.body.host_ip || result.body.host || '') + ')';
+            }
+            if (result.body.warning) {
+              setBrowserMessage(result.body.warning, 'info');
+            } else {
+              setBrowserMessage('', 'info');
+            }
+            renderBrowserEntries(result.body.entries || []);
+          })
+          .catch(function (error) {
+            setBrowserMessage('接続に失敗しました: ' + String(error), 'error');
+            renderBrowserEntries([]);
+          });
+      }
+
+      function openBrowser(kind, initialPath, onSelect) {
+        browserState.kind = kind;
+        browserState.onSelect = onSelect;
+        browserState.currentPath = initialPath || 'X:\\';
+        browserState.parentPath = browserState.currentPath;
+        if (browserModal) {
+          browserModal.hidden = false;
+        }
+        loadBrowserPath(browserState.currentPath);
+      }
+
+      function createDiskCard(disk, idx) {
+        var card = document.createElement('div');
+        card.className = 'manual-card';
+
+        var header = document.createElement('div');
+        header.className = 'disk-header';
+
+        var title = document.createElement('h4');
+        title.className = 'disk-title';
+        title.textContent = '新しいディスク' + (idx + 1);
+        header.appendChild(title);
+
+        if (idx > 0) {
+          var deleteButton = document.createElement('button');
+          deleteButton.type = 'button';
+          deleteButton.className = 'small-button';
+          deleteButton.textContent = '削除';
+          deleteButton.addEventListener('click', function () {
+            disks.splice(idx, 1);
+            renderDisks();
+          });
+          header.appendChild(deleteButton);
+        }
+
+        card.appendChild(header);
+
+        var radioGroup = document.createElement('div');
+        radioGroup.className = 'radio-group';
+
+        var emptyLabel = document.createElement('label');
+        emptyLabel.className = 'radio-item';
+        var emptyRadio = document.createElement('input');
+        emptyRadio.type = 'radio';
+        emptyRadio.name = 'disk_type_' + idx;
+        emptyRadio.value = 'empty';
+        emptyRadio.checked = disk.type !== 'existing';
+        emptyLabel.appendChild(emptyRadio);
+        emptyLabel.appendChild(document.createTextNode('空のハードディスクを作成する'));
+
+        var existingLabel = document.createElement('label');
+        existingLabel.className = 'radio-item';
+        var existingRadio = document.createElement('input');
+        existingRadio.type = 'radio';
+        existingRadio.name = 'disk_type_' + idx;
+        existingRadio.value = 'existing';
+        existingRadio.checked = disk.type === 'existing';
+        existingLabel.appendChild(existingRadio);
+        existingLabel.appendChild(document.createTextNode('既存の仮想ハードディスクを使用する'));
+
+        radioGroup.appendChild(emptyLabel);
+        radioGroup.appendChild(existingLabel);
+        card.appendChild(radioGroup);
+
+        var emptyField = document.createElement('div');
+        emptyField.className = 'field';
+        emptyField.style.marginTop = '10px';
+        var emptyLabelText = document.createElement('label');
+        emptyLabelText.textContent = 'サイズ（GB）';
+        var emptyInput = document.createElement('input');
+        emptyInput.type = 'text';
+        emptyInput.value = disk.size_gb || '100';
+        emptyInput.inputMode = 'numeric';
+        emptyInput.pattern = '[0-9]*';
+        emptyField.appendChild(emptyLabelText);
+        emptyField.appendChild(emptyInput);
+        card.appendChild(emptyField);
+
+        var existingField = document.createElement('div');
+        existingField.className = 'field';
+        existingField.style.marginTop = '10px';
+        var existingLabelText = document.createElement('label');
+        existingLabelText.textContent = 'パス';
+        var pathWrap = document.createElement('div');
+        pathWrap.className = 'path-picker';
+        var pathInput = document.createElement('input');
+        pathInput.type = 'text';
+        pathInput.value = disk.path || '';
+        var browseButton = document.createElement('button');
+        browseButton.type = 'button';
+        browseButton.className = 'small-button';
+        browseButton.textContent = '参照';
+        pathWrap.appendChild(pathInput);
+        pathWrap.appendChild(browseButton);
+        existingField.appendChild(existingLabelText);
+        existingField.appendChild(pathWrap);
+        card.appendChild(existingField);
+
+        function updateDiskType(type) {
+          disk.type = type;
+          emptyField.style.display = type === 'empty' ? '' : 'none';
+          existingField.style.display = type === 'existing' ? '' : 'none';
+          syncManualDisks();
+        }
+
+        emptyRadio.addEventListener('change', function () {
+          if (emptyRadio.checked) {
+            updateDiskType('empty');
+          }
+        });
+
+        existingRadio.addEventListener('change', function () {
+          if (existingRadio.checked) {
+            updateDiskType('existing');
+          }
+        });
+
+        emptyInput.addEventListener('input', function () {
+          var nextValue = onlyDigits(emptyInput.value);
+          emptyInput.value = nextValue;
+          disk.size_gb = nextValue;
+          syncManualDisks();
+        });
+
+        pathInput.addEventListener('input', function () {
+          disk.path = pathInput.value;
+          syncManualDisks();
+        });
+
+        browseButton.addEventListener('click', function () {
+          openBrowser('vhd', pathInput.value || 'X:\\', function (selectedPath) {
+            pathInput.value = selectedPath;
+            disk.path = selectedPath;
+            syncManualDisks();
+          });
+        });
+
+        updateDiskType(disk.type);
+        return card;
+      }
+
+      function renderDisks() {
+        if (!storageContainer) {
+          return;
+        }
+        storageContainer.innerHTML = '';
+        disks.forEach(function (disk, idx) {
+          storageContainer.appendChild(createDiskCard(disk, idx));
+        });
+        syncManualDisks();
+      }
+
+      if (addDiskButton) {
+        addDiskButton.addEventListener('click', function () {
+          disks.push({ type: 'empty', size_gb: '100', path: '' });
+          renderDisks();
+        });
+      }
+
+      var isoField = document.getElementById('iso-path-field');
+      var isoPathInput = document.getElementById('os_iso_path');
+      var browseIsoButton = document.getElementById('browse-iso-button');
+
+      function updateIsoField() {
+        var checked = document.querySelector('input[name="os_install_mode"]:checked');
+        var isIso = checked && checked.value === 'iso';
+        if (!isoField || !isoPathInput) {
+          return;
+        }
+        isoField.style.display = isIso ? '' : 'none';
+        isoPathInput.disabled = !isIso;
+      }
+
+      Array.prototype.forEach.call(document.querySelectorAll('input[name="os_install_mode"]'), function (radio) {
+        radio.addEventListener('change', updateIsoField);
+      });
+
+      if (browseIsoButton && isoPathInput) {
+        browseIsoButton.addEventListener('click', function () {
+          openBrowser('iso', isoPathInput.value || 'X:\\', function (selectedPath) {
+            isoPathInput.value = selectedPath;
+          });
+        });
+      }
+
+      if (browserClose) {
+        browserClose.addEventListener('click', closeBrowserModal);
+      }
+
+      if (browserModal) {
+        browserModal.addEventListener('click', function (event) {
+          if (event.target === browserModal) {
+            closeBrowserModal();
+          }
+        });
+      }
+
+      if (browserUp) {
+        browserUp.addEventListener('click', function () {
+          if (!browserState.parentPath || browserState.parentPath === browserState.currentPath) {
+            return;
+          }
+          loadBrowserPath(browserState.parentPath);
+        });
+      }
+
+      Array.prototype.forEach.call(document.querySelectorAll('input[inputmode="numeric"]'), function (input) {
+        input.addEventListener('input', function () {
+          input.value = onlyDigits(input.value);
+        });
+      });
+
       deployType.addEventListener('change', updateDeployFields);
+      renderDisks();
+      updateIsoField();
       updateDeployFields();
     })();
   </script>

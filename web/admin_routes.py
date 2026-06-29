@@ -9,10 +9,12 @@ from web.state import (
     CURRENT_SUBNET_OPTIONS,
     CURRENT_USAGE_OPTIONS,
     CURRENT_VHOST_IP_DISPLAY_MAP,
+    CURRENT_VM_SWITCH_OPTIONS,
     CURRENT_VM_TEMPLATE_OPTIONS,
     DEFAULT_OS_OPTIONS,
     DEFAULT_SUBNET_OPTIONS,
     DEFAULT_USAGE_OPTIONS,
+    DEFAULT_VM_SWITCH_OPTIONS,
     DEFAULT_VM_TEMPLATE_OPTIONS,
 )
 
@@ -120,8 +122,17 @@ def refresh_vm_templates(executed_by=None):
     try:
         hosts = build_hyperv_hosts_from_settings()
         vm_templates, host_results = hyperv.get_vm_templates_from_hosts(hosts)
+        vm_switches, switch_results = hyperv.get_vm_switches_from_hosts(hosts)
 
         for result in host_results:
+            status = result.get("status", "info")
+            message = result.get("message", "")
+            if status in ("success", "skipped"):
+                db.append_log("sync", executor_name, "info", message)
+            else:
+                db.append_log("sync", executor_name, "error", message)
+
+        for result in switch_results:
             status = result.get("status", "info")
             message = result.get("message", "")
             if status in ("success", "skipped"):
@@ -137,10 +148,25 @@ def refresh_vm_templates(executed_by=None):
                 vm_templates,
                 updated_by=executor_name,
             )
-            return f"VMテンプレート {len(vm_templates)} 件を反映しました。"
+            template_message = f"VMテンプレート {len(vm_templates)} 件を反映しました。"
+        else:
+            CURRENT_VM_TEMPLATE_OPTIONS.extend(DEFAULT_VM_TEMPLATE_OPTIONS)
+            template_message = "VMテンプレートを取得できませんでした。既存設定を使用します。"
 
-        CURRENT_VM_TEMPLATE_OPTIONS.extend(DEFAULT_VM_TEMPLATE_OPTIONS)
-        return "VMテンプレートを取得できませんでした。既存設定を使用します。"
+        CURRENT_VM_SWITCH_OPTIONS.clear()
+        if vm_switches:
+            CURRENT_VM_SWITCH_OPTIONS.extend(vm_switches)
+            db.replace_master_options(
+                "vm_switch",
+                vm_switches,
+                updated_by=executor_name,
+            )
+            switch_message = f"仮想スイッチ {len(vm_switches)} 件を反映しました。"
+        else:
+            CURRENT_VM_SWITCH_OPTIONS.extend(DEFAULT_VM_SWITCH_OPTIONS)
+            switch_message = "仮想スイッチを取得できませんでした。既存設定を使用します。"
+
+        return f"{template_message} {switch_message}"
 
     except Exception as exc:
         db.append_log("sync", executor_name, "error", f"Hyper-V取得失敗: {str(exc)}")

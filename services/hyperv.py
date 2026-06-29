@@ -1,4 +1,9 @@
-from services.hyperv_templates import get_vm_templates, get_vm_templates_from_hosts
+from services.hyperv_templates import (
+    browse_host_path,
+    get_vm_switches_from_hosts,
+    get_vm_templates,
+    get_vm_templates_from_hosts,
+)
 
 
 def create_virtual_machine(request_data):
