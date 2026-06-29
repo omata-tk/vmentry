@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$ServiceName = "VmEntry",
     [string]$DisplayName = "VM Entry Web",
     [string]$Description = "VM Entry application service",

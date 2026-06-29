@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$PythonCommand = "python",
     [string]$AppPort = "5000",
     [switch]$InstallPythonIfMissing

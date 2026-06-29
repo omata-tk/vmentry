@@ -1,4 +1,4 @@
-param(
+﻿param(
 	[string]$ListenHost = "0.0.0.0",
 	[int]$Port = 5000
 )
