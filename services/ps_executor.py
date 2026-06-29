@@ -1,7 +1,42 @@
+import base64
+import re
+import uuid
+
 try:
     import winrm
 except ImportError:
     winrm = None
+
+
+_CLIXML_ERROR_RE = re.compile(r'<S S="Error">(.*?)</S>', re.DOTALL)
+
+
+def _decode_ps_bytes(raw_bytes):
+    data = raw_bytes or b""
+    for encoding in ("utf-8", "cp932", "utf-16-le"):
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("utf-8", errors="ignore")
+
+
+def _normalize_stderr_text(stderr):
+    text = (stderr or "").strip()
+    if not text:
+        return ""
+
+    if "#< CLIXML" in text:
+        matches = _CLIXML_ERROR_RE.findall(text)
+        if matches:
+            text = "\n".join(matches)
+
+    text = text.replace("_x000D__x000A_", "\n")
+    text = text.replace("_x000D_", "\n")
+    text = text.replace("_x000A_", "\n")
+    text = text.replace("`r`n", "\n")
+    text = text.replace("`r", "\n")
+    return text.strip()
 
 
 def run_ps_on_host(host_ip, username, password, script):
@@ -17,14 +52,62 @@ def run_ps_on_host(host_ip, username, password, script):
         transport="ntlm",
         server_cert_validation="ignore",
     )
-    result = session.run_ps(script)
+    
+    def _decode_output(result):
+        stdout = _decode_ps_bytes(result.std_out)
+        stderr = _normalize_stderr_text(_decode_ps_bytes(result.std_err))
+        return stdout, stderr
 
-    stdout = (result.std_out or b"").decode("utf-8", errors="ignore")
-    stderr = (result.std_err or b"").decode("utf-8", errors="ignore")
+    script_id = str(uuid.uuid4())
+    temp_script_path = f"C:\\Windows\\Temp\\ps_script_{script_id}.ps1"
+    temp_b64_path = f"C:\\Windows\\Temp\\ps_script_{script_id}.b64"
 
-    if result.status_code != 0:
+    # WinRM のコマンド長制限回避のため、Base64化した本文を分割送信してリモートで再構築する。
+    script_b64 = base64.b64encode(script.encode("utf-8")).decode("ascii")
+    chunk_size = 1200
+
+    init_result = session.run_ps(
+        rf"Set-Content -LiteralPath '{temp_b64_path}' -Value '' -Encoding Ascii -Force"
+    )
+    _, init_stderr = _decode_output(init_result)
+    if init_result.status_code != 0:
         raise RuntimeError(
-            f"PowerShell 実行失敗 host={host_ip} status={result.status_code} stderr={stderr.strip() or '(no stderr)'}"
+            f"PowerShell スクリプト保存失敗 host={host_ip} status={init_result.status_code} stderr={init_stderr.strip() or '(no stderr)'}"
         )
 
-    return stdout
+    try:
+        for i in range(0, len(script_b64), chunk_size):
+            chunk = script_b64[i : i + chunk_size]
+            append_result = session.run_ps(
+                rf"Add-Content -LiteralPath '{temp_b64_path}' -Value '{chunk}' -NoNewline -Encoding Ascii"
+            )
+            _, append_stderr = _decode_output(append_result)
+            if append_result.status_code != 0:
+                raise RuntimeError(
+                    f"PowerShell スクリプト保存失敗 host={host_ip} status={append_result.status_code} stderr={append_stderr.strip() or '(no stderr)'}"
+                )
+
+        materialize_result = session.run_ps(
+            rf"$b64 = Get-Content -LiteralPath '{temp_b64_path}' -Raw; "
+            rf"$bytes = [Convert]::FromBase64String($b64); "
+            rf"[System.IO.File]::WriteAllBytes('{temp_script_path}', $bytes)"
+        )
+        _, materialize_stderr = _decode_output(materialize_result)
+        if materialize_result.status_code != 0:
+            raise RuntimeError(
+                f"PowerShell スクリプト保存失敗 host={host_ip} status={materialize_result.status_code} stderr={materialize_stderr.strip() or '(no stderr)'}"
+            )
+
+        result = session.run_ps(rf"& '{temp_script_path}'")
+        stdout, stderr = _decode_output(result)
+
+        if result.status_code != 0:
+            raise RuntimeError(
+                f"PowerShell 実行失敗 host={host_ip} status={result.status_code} stderr={stderr.strip() or '(no stderr)'}"
+            )
+
+        return stdout
+    finally:
+        session.run_ps(
+            rf"Remove-Item -LiteralPath '{temp_script_path}','{temp_b64_path}' -Force -ErrorAction SilentlyContinue"
+        )

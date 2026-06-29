@@ -28,6 +28,13 @@ Get-VM |
     return [(name.strip(), name.strip()) for name in names if name and name.strip()]
 
 
+def _format_host_label(host_name, host_ip):
+    label = host_name
+    if host_ip:
+        label = f"{label} ({host_ip})"
+    return label
+
+
 def fetch_vm_switches_from_host(host_ip, username, password):
     script = r"""
 $ErrorActionPreference = 'Stop'
@@ -69,6 +76,7 @@ def get_vm_templates_from_hosts(hosts_config):
         password_encrypted = (host.get("password") or "").strip()
 
         password = db._decrypt_password(password_encrypted)
+        host_label = _format_host_label(host_name, ip)
 
         if not ip or not user or not password:
             host_results.append(
@@ -84,7 +92,21 @@ def get_vm_templates_from_hosts(hosts_config):
         try:
             templates = fetch_templates_from_host(ip, user, password)
             for value, label in templates:
-                merged[value] = label
+                normalized_value = (value or "").strip()
+                if not normalized_value:
+                    continue
+
+                entry = merged.setdefault(
+                    normalized_value,
+                    {
+                        "label": (label or normalized_value).strip() or normalized_value,
+                        "hosts": [],
+                    },
+                )
+                if label and not entry["label"]:
+                    entry["label"] = label.strip()
+                if host_label not in entry["hosts"]:
+                    entry["hosts"].append(host_label)
 
             host_results.append(
                 {
@@ -104,7 +126,15 @@ def get_vm_templates_from_hosts(hosts_config):
                 }
             )
 
-    templates = sorted(merged.items(), key=lambda item: item[0].lower())
+    templates = []
+    for value, data in merged.items():
+        host_suffix = " / ".join(data["hosts"])
+        display_label = data["label"]
+        if host_suffix:
+            display_label = f"{display_label} [{host_suffix}]"
+        templates.append((value, display_label))
+
+    templates = sorted(templates, key=lambda item: item[0].lower())
     return templates, host_results
 
 

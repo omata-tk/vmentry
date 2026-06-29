@@ -1,4 +1,5 @@
 import json
+import ipaddress
 
 from flask import jsonify, redirect, render_template, request, url_for
 
@@ -17,6 +18,8 @@ from web.state import (
 
 
 CONFIRM_FIELDS = [
+    ("ip_assignment_mode", "IP割当方法"),
+    ("manual_ip_address", "手動IPアドレス"),
     ("target_subnet", "対象サブネット"),
     ("subject", "Redmineチケット名"),
     ("assignee_name", "担当者"),
@@ -36,21 +39,72 @@ CONFIRM_FIELDS = [
     ("initial_builder", "初期構築担当者"),
     ("notes", "特記事項"),
     ("vm_template", "VMテンプレート"),
+    ("clone_host_ip", "複製先ホスト"),
+    ("template_iso_path", "ISOイメージ（テンプレート複製後にマウント）"),
     ("vcpu_count", "仮想プロセッサ カウント"),
     ("enable_nested_virtualization", "入れ子になった仮想化"),
     ("startup_memory", "起動メモリ"),
     ("memory_unit", "メモリ単位"),
     ("use_dynamic_memory", "動的メモリ"),
     ("virtual_switch", "仮想スイッチ"),
+    ("vlan_id", "VLAN ID"),
     ("manual_disks_json", "ストレージ構成"),
     ("os_install_mode", "OSインストール方法"),
     ("os_iso_path", "OS ISO パス"),
 ]
 
 
+def build_visible_confirm_fields(values):
+    deploy_type = (values.get("deploy_type") or "").strip()
+    ip_assignment_mode = _normalize_ip_assignment_mode(values.get("ip_assignment_mode") or "")
+    template_iso_mount = (values.get("template_iso_mount") or "").strip() == "on"
+    os_install_mode = (values.get("os_install_mode") or "").strip()
+
+    visible_fields = []
+    for field_key, field_label in CONFIRM_FIELDS:
+        if field_key == "manual_ip_address" and ip_assignment_mode != "manual":
+            continue
+        if field_key == "target_subnet" and ip_assignment_mode == "manual":
+            continue
+
+        if field_key in (
+            "vm_template",
+            "clone_host_ip",
+            "template_iso_path",
+        ) and deploy_type != "template":
+            continue
+
+        if field_key == "template_iso_path" and not template_iso_mount:
+            continue
+
+        if field_key in (
+            "vcpu_count",
+            "enable_nested_virtualization",
+            "startup_memory",
+            "memory_unit",
+            "use_dynamic_memory",
+            "virtual_switch",
+            "vlan_id",
+            "manual_disks_json",
+            "os_install_mode",
+            "os_iso_path",
+        ) and deploy_type != "manual":
+            continue
+
+        if field_key == "os_iso_path" and os_install_mode != "iso":
+            continue
+
+        visible_fields.append((field_key, field_label))
+
+    return visible_fields
+
+
 def form_defaults():
     target_default = CURRENT_SUBNET_OPTIONS[0][0] if CURRENT_SUBNET_OPTIONS else ""
+    clone_host_default = _configured_hyperv_host_options()[0][0] if _configured_hyperv_host_options() else ""
     return {
+        "ip_assignment_mode": "auto",
+        "manual_ip_address": "",
         "target_subnet": target_default,
         "subject": db.get_setting("form_default_subject", ""),
         "assignee_name": "",
@@ -71,12 +125,16 @@ def form_defaults():
         "notes": "",
         "deploy_type": "template",
         "vm_template": "",
+        "clone_host_ip": clone_host_default,
+        "template_iso_mount": "",
+        "template_iso_path": "",
         "vcpu_count": "",
         "enable_nested_virtualization": "",
         "startup_memory": "",
         "memory_unit": "GB",
         "use_dynamic_memory": "",
         "virtual_switch": "",
+        "vlan_id": "",
         "manual_disks_json": "",
         "os_install_mode": "later",
         "os_iso_path": "",
@@ -103,19 +161,40 @@ def build_values(form_data):
     if vhost_value in reverse_map:
         values["vhost_ip"] = reverse_map[vhost_value]
 
+    if _normalize_ip_assignment_mode(values.get("ip_assignment_mode")) == "manual":
+        manual_ip = (values.get("manual_ip_address") or "").strip()
+        derived_subnet = _extract_subnet_prefix(manual_ip)
+        if derived_subnet:
+            values["target_subnet"] = derived_subnet
+
     return values
 
 
 def build_confirm_display_values(values):
     display_values = dict(values)
+    ip_assignment_mode = (values.get("ip_assignment_mode") or "").strip()
+    if ip_assignment_mode == "manual":
+        display_values["ip_assignment_mode"] = "手動入力"
+    else:
+        display_values["ip_assignment_mode"] = "対象サブネットから自動採番"
+
+    display_values["manual_ip_address"] = values.get("manual_ip_address", "").strip() or "-"
+
     os_label_map = {value: label for value, label in CURRENT_OS_OPTIONS}
     vhost_label_map = dict(CURRENT_VHOST_IP_DISPLAY_MAP)
+    template_label_map = {value: label for value, label in CURRENT_VM_TEMPLATE_OPTIONS}
+    clone_host_label_map = {value: label for value, label in _configured_hyperv_host_options()}
     vm_switch_label_map = {value: label for value, label in CURRENT_VM_SWITCH_OPTIONS}
     display_values["os_value"] = os_label_map.get(values.get("os_value", ""), values.get("os_value", ""))
     display_values["vhost_ip"] = vhost_label_map.get(values.get("vhost_ip", ""), values.get("vhost_ip", ""))
+    display_values["vm_template"] = template_label_map.get(values.get("vm_template", ""), values.get("vm_template", ""))
+    display_values["clone_host_ip"] = clone_host_label_map.get(
+        values.get("clone_host_ip", ""), values.get("clone_host_ip", "")
+    )
     display_values["virtual_switch"] = vm_switch_label_map.get(
         values.get("virtual_switch", ""), values.get("virtual_switch", "")
     )
+    display_values["vlan_id"] = values.get("vlan_id", "").strip()
     display_values["enable_nested_virtualization"] = "有効" if values.get("enable_nested_virtualization") == "on" else "無効"
     display_values["use_dynamic_memory"] = "有効" if values.get("use_dynamic_memory") == "on" else "無効"
     display_values["os_install_mode"] = (
@@ -129,6 +208,7 @@ def build_confirm_display_values(values):
     if startup_memory:
         display_values["startup_memory"] = f"{startup_memory} {memory_unit}".strip()
 
+    display_values["template_iso_path"] = values.get("template_iso_path", "").strip() or "-"
     display_values["manual_disks_json"] = _build_storage_confirm_text(values.get("manual_disks_json", ""))
     return display_values
 
@@ -218,34 +298,85 @@ def extract_usage_values(form_data):
     return deduped
 
 
+def _is_valid_ipv4_address(value):
+    text = (value or "").strip()
+    if not text:
+        return False
+    try:
+        ipaddress.IPv4Address(text)
+        return True
+    except ipaddress.AddressValueError:
+        return False
+
+
+def _normalize_ip_assignment_mode(value):
+    text = (value or "").strip().lower()
+    return "manual" if text == "manual" else "auto"
+
+
+def _extract_subnet_prefix(ip_text):
+    if not _is_valid_ipv4_address(ip_text):
+        return ""
+    parts = ip_text.strip().split(".")
+    return ".".join(parts[:3])
+
+
+def _is_disallowed_host_octet(ip_text):
+    if not _is_valid_ipv4_address(ip_text):
+        return False
+    try:
+        octet = int(ip_text.strip().split(".")[3])
+    except (IndexError, ValueError):
+        return False
+    return octet in {0, 1, 255}
+
+
 def build_ticket_data(form_data):
     errors = []
     selected_subnets = {value for value, _ in CURRENT_SUBNET_OPTIONS}
 
     debug_ticket_only = (form_data.get("debug_ticket_only") or "").strip() == "on"
 
+    ip_assignment_mode = _normalize_ip_assignment_mode(form_data.get("ip_assignment_mode") or "")
+    manual_ip_address = (form_data.get("manual_ip_address") or "").strip()
     target_subnet = (form_data.get("target_subnet") or "").strip()
     subject = (form_data.get("subject") or "").strip()
     vm_name = (form_data.get("vm_name") or "").strip()
 
-    if not target_subnet:
-        errors.append("対象サブネットを選択してください。")
-    elif selected_subnets and target_subnet not in selected_subnets:
-        errors.append("対象サブネットは候補から選択してください。")
+    if ip_assignment_mode != "manual":
+        if not target_subnet:
+            errors.append("対象サブネットを選択してください。")
+        elif selected_subnets and target_subnet not in selected_subnets:
+            errors.append("対象サブネットは候補から選択してください。")
 
     if not subject:
         errors.append("Redmineチケット名は必須です。")
+
+    if ip_assignment_mode == "manual":
+        if not manual_ip_address:
+            errors.append("IP割当方法で手動入力を選択した場合は手動IPアドレスを入力してください。")
+        elif not _is_valid_ipv4_address(manual_ip_address):
+            errors.append("手動IPアドレスはIPv4形式で入力してください。")
+        elif _is_disallowed_host_octet(manual_ip_address):
+            errors.append("手動IPアドレスの第4オクテットに 0/1/255 は使用できません。")
+        else:
+            target_subnet = _extract_subnet_prefix(manual_ip_address)
 
     if not debug_ticket_only and not vm_name:
         errors.append("仮想マシン名は必須です。")
 
     deploy_type = (form_data.get("deploy_type") or "").strip()
     vm_template = (form_data.get("vm_template") or "").strip()
+    clone_host_ip = (form_data.get("clone_host_ip") or "").strip()
+    template_iso_mount = (form_data.get("template_iso_mount") or "").strip() == "on"
+    template_iso_path = (form_data.get("template_iso_path") or "").strip()
+    vm_host = (form_data.get("vhost_ip") or "").strip()
 
     vcpu_count = (form_data.get("vcpu_count") or "").strip()
     startup_memory = (form_data.get("startup_memory") or "").strip()
     memory_unit = (form_data.get("memory_unit") or "").strip()
     virtual_switch = (form_data.get("virtual_switch") or "").strip()
+    vlan_id = (form_data.get("vlan_id") or "").strip()
     os_install_mode = (form_data.get("os_install_mode") or "").strip() or "later"
     os_iso_path = (form_data.get("os_iso_path") or "").strip()
     manual_disks_raw = (form_data.get("manual_disks_json") or "").strip()
@@ -255,8 +386,17 @@ def build_ticket_data(form_data):
 
     if not debug_ticket_only:
         if deploy_type == "template":
+            configured_host_ips = _configured_hyperv_host_ips()
             if not vm_template:
                 errors.append("VMテンプレートを選択してください。")
+            if not clone_host_ip:
+                errors.append("複製先ホストを選択してください。")
+            if template_iso_mount and not template_iso_path:
+                errors.append("ISOイメージをマウントする場合はパスを入力してください。")
+            if not vm_host:
+                errors.append("IPアドレス（仮想ホスト）を選択してください。")
+            elif configured_host_ips and _normalize_hyperv_host_ip(clone_host_ip) not in configured_host_ips:
+                errors.append("複製先ホストは管理者設定のホストIPから選択してください。")
         elif deploy_type == "manual":
             if not vcpu_count or not startup_memory:
                 errors.append("手動作成の場合は仮想プロセッサ カウントと起動メモリが必須です。")
@@ -275,6 +415,14 @@ def build_ticket_data(form_data):
                 errors.append("仮想スイッチを選択してください。")
             elif switch_values and virtual_switch not in switch_values:
                 errors.append("仮想スイッチは候補から選択してください。")
+
+            if vlan_id:
+                try:
+                    vlan_int = int(vlan_id)
+                    if vlan_int < 1 or vlan_int > 4094:
+                        errors.append("VLAN IDは1から4094の範囲で入力してください。")
+                except ValueError:
+                    errors.append("VLAN IDは数値で入力してください。")
 
             manual_disks, parse_error = parse_manual_disks_json(manual_disks_raw)
             if parse_error:
@@ -313,6 +461,8 @@ def build_ticket_data(form_data):
 
     ticket_data = {
         "target_subnet": target_subnet,
+        "ip_assignment_mode": ip_assignment_mode,
+        "manual_ip_address": manual_ip_address,
         "subject": subject,
         "tracker_id": db.get_int_setting("default_tracker_id", 12),
         "status_id": db.get_int_setting("default_status_id", 13),
@@ -338,6 +488,9 @@ def build_ticket_data(form_data):
         "vm_config": {
             "deploy_type": deploy_type,
             "vm_template": vm_template,
+            "clone_host_ip": clone_host_ip,
+            "template_iso_mount": template_iso_mount,
+            "template_iso_path": template_iso_path,
             "manual": {
                 "vcpu_count": vcpu_count,
                 "enable_nested_virtualization": (form_data.get("enable_nested_virtualization") or "").strip() == "on",
@@ -345,6 +498,7 @@ def build_ticket_data(form_data):
                 "memory_unit": memory_unit,
                 "use_dynamic_memory": (form_data.get("use_dynamic_memory") or "").strip() == "on",
                 "virtual_switch": virtual_switch,
+                "vlan_id": vlan_id,
                 "disks": parse_manual_disks_json(manual_disks_raw)[0],
                 "os_install_mode": os_install_mode,
                 "os_iso_path": os_iso_path,
@@ -396,6 +550,37 @@ def _configured_hyperv_hosts():
     return hosts
 
 
+def _normalize_hyperv_host_ip(value):
+    text = (value or "").strip()
+    if not text:
+        return ""
+
+    text = text.replace("（Hyper-v）", "").replace("(Hyper-v)", "")
+    text = text.replace("（Hyper-V）", "").replace("(Hyper-V)", "")
+    return text.strip()
+
+
+def _configured_hyperv_host_ips():
+    ips = set()
+    for host in _configured_hyperv_hosts():
+        ip = _normalize_hyperv_host_ip(host.get("ip") or "")
+        if ip:
+            ips.add(ip)
+    return ips
+
+
+def _configured_hyperv_host_options():
+    options = []
+    for host in _configured_hyperv_hosts():
+        ip = _normalize_hyperv_host_ip(host.get("ip") or "")
+        if not ip:
+            continue
+        index = host.get("index")
+        label = f"ホスト{index}" if index else "Hyper-V ホスト"
+        options.append((ip, f"{label} ({ip})"))
+    return options
+
+
 def _filter_entries_for_browse(entries, browse_kind):
     if browse_kind == "iso":
         allowed_ext = {".iso"}
@@ -445,7 +630,11 @@ def register_entry_routes(app):
 
         if request.method == "POST" and action in ("confirm", "create"):
             selected_subnets = {value for value, _ in CURRENT_SUBNET_OPTIONS}
-            if values.get("target_subnet") not in selected_subnets and CURRENT_SUBNET_OPTIONS:
+            if (
+                _normalize_ip_assignment_mode(values.get("ip_assignment_mode")) != "manual"
+                and values.get("target_subnet") not in selected_subnets
+                and CURRENT_SUBNET_OPTIONS
+            ):
                 values["target_subnet"] = CURRENT_SUBNET_OPTIONS[0][0]
 
             ticket_data, errors = build_ticket_data(form_data)
@@ -466,11 +655,19 @@ def register_entry_routes(app):
                             f'プロジェクトが見つかりません: {db.get_setting("project_name", "")}'
                         )
 
-                    confirmed_ip, _ = redmine.allocate_next_ip(
-                        project_id,
-                        ticket_data["target_subnet"],
-                        api_key=api_key,
-                    )
+                    if ticket_data.get("ip_assignment_mode") == "manual":
+                        confirmed_ip = ticket_data.get("manual_ip_address", "").strip()
+                        if redmine.is_ip_already_registered(project_id, confirmed_ip, api_key=api_key):
+                            raise RuntimeError(
+                                f"指定されたIP ({confirmed_ip}) は既に登録済みです。"
+                                "別のIPを入力してください。"
+                            )
+                    else:
+                        confirmed_ip, _ = redmine.allocate_next_ip(
+                            project_id,
+                            ticket_data["target_subnet"],
+                            api_key=api_key,
+                        )
                     confirm = True
                     db.append_log(
                         "entry",
@@ -498,11 +695,36 @@ def register_entry_routes(app):
                     if not confirmed_ip:
                         raise RuntimeError("確認画面の割当予定IPが取得できません。確認画面から再実行してください。")
 
+                    if ticket_data.get("ip_assignment_mode") == "manual":
+                        requested_ip = (ticket_data.get("manual_ip_address") or "").strip()
+                        if requested_ip != confirmed_ip:
+                            raise RuntimeError(
+                                "確認画面の手動IPが変更されています。"
+                                "入力画面に戻って再確認してください。"
+                            )
+
                     if redmine.is_ip_already_registered(project_id, confirmed_ip, api_key=api_key):
                         raise RuntimeError(
                             f"確認後に同一IP ({confirmed_ip}) が登録されました。"
                             "入力画面に戻って再確認してください。"
                         )
+
+                    clone_request = None
+                    if not ticket_data.get("debug_ticket_only"):
+                        clone_request = {
+                            "deploy_type": ticket_data.get("vm_config", {}).get("deploy_type"),
+                            "vm_template": ticket_data.get("vm_config", {}).get("vm_template"),
+                            "vm_name": (form_data.get("vm_name") or "").strip(),
+                            "vhost_ip": _normalize_hyperv_host_ip(form_data.get("vhost_ip") or ""),
+                            "clone_host_ip": _normalize_hyperv_host_ip(
+                                ticket_data.get("vm_config", {}).get("clone_host_ip", "")
+                            ),
+                            "vlan_id": ticket_data.get("vm_config", {}).get("manual", {}).get("vlan_id", ""),
+                            "template_iso_mount": ticket_data.get("vm_config", {}).get("template_iso_mount", False),
+                            "template_iso_path": ticket_data.get("vm_config", {}).get("template_iso_path", ""),
+                            "hosts": _configured_hyperv_hosts(),
+                        }
+                        hyperv.precheck_virtual_machine(clone_request)
 
                     result = redmine.create_redmine_ticket(
                         project_id,
@@ -523,6 +745,19 @@ def register_entry_routes(app):
                         result["subject"] = ticket_data.get("subject")
                         result["vm_name"] = form_data.get("vm_name")
                         result["target_subnet"] = ticket_data.get("target_subnet")
+                        if clone_request:
+                            hyperv.create_virtual_machine(clone_request)
+                            db.append_log(
+                                "entry",
+                                get_session_user_name(),
+                                "info",
+                                (
+                                    f"vm clone success ticket_id={result.get('id')} "
+                                    f"vm_name={clone_request['vm_name']} host={clone_request['clone_host_ip']} "
+                                    f"template={clone_request['vm_template']}"
+                                ),
+                            )
+
                         db.append_log(
                             "entry",
                             get_session_user_name(),
@@ -531,6 +766,11 @@ def register_entry_routes(app):
                         )
                 except Exception as exc:
                     error = str(exc)
+                    if result and result.get("result") == "success":
+                        error = (
+                            f"チケットID {result.get('id')} は作成しましたが、"
+                            f"VM複製に失敗しました: {error}"
+                        )
                     db.append_log(
                         "entry",
                         get_session_user_name(),
@@ -544,7 +784,7 @@ def register_entry_routes(app):
             confirm_display_values=confirm_display_values,
             confirm=confirm,
             confirmed_ip=confirmed_ip,
-            confirm_fields=CONFIRM_FIELDS,
+            confirm_fields=build_visible_confirm_fields(values),
             error=error,
             result=result,
             notice=notice,
@@ -552,6 +792,7 @@ def register_entry_routes(app):
             is_admin=is_admin_session(),
             subnet_options=CURRENT_SUBNET_OPTIONS,
             vhost_options=sorted(CURRENT_VHOST_IP_DISPLAY_MAP.items(), key=lambda item: item[1]),
+            clone_host_options=_configured_hyperv_host_options(),
             os_options=CURRENT_OS_OPTIONS,
             usage_options=CURRENT_USAGE_OPTIONS,
             usage_selected=extract_usage_values(form_data) if request.method == "POST" else extract_usage_values(values),

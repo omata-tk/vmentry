@@ -29,6 +29,9 @@
     .section-title { margin: 0 0 8px; font-size: 1.02rem; }
     .section-subtitle { margin: 0 0 18px; color: #64748b; line-height: 1.7; }
     .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 14px; }
+    .form-section { margin-top: 20px; }
+    .form-section-title { margin: 0 0 12px; font-size: .98rem; color: #0f172a; }
+    .form-section-body { display: grid; gap: 14px; }
     .field.full { grid-column: 1 / -1; }
     label { display: block; margin-bottom: 6px; font-size: .82rem; font-weight: 700; color: #334155; }
     input, select, textarea { width: 100%; box-sizing: border-box; border: 1px solid #cbd5e1; border-radius: 15px; padding: 12px 14px; font: inherit; background: #fff; color: #0f172a; }
@@ -169,7 +172,9 @@
 					{% else %}
           <form method="post">
             <div class="form-grid">
-              <div class="field"><label for="target_subnet">対象サブネット<span class="required-mark">*</span></label><select id="target_subnet" name="target_subnet" required>{% for value, label in subnet_options %}<option value="{{ value }}" {% if values.target_subnet == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select><div class="help">IP 採番の対象です。</div></div>
+              <div class="field"><label for="ip_assignment_mode">IP割当方法<span class="required-mark">*</span></label><select id="ip_assignment_mode" name="ip_assignment_mode" required><option value="auto" {% if values.ip_assignment_mode != 'manual' %}selected{% endif %}>対象サブネットから自動採番</option><option value="manual" {% if values.ip_assignment_mode == 'manual' %}selected{% endif %}>手動入力</option></select><div class="help">手動入力を選択した場合、確認画面で入力したIPをそのまま利用します。</div></div>
+              <div class="field" id="manual-ip-field"><label for="manual_ip_address">手動IPアドレス<span class="required-mark">*</span></label><input id="manual_ip_address" name="manual_ip_address" value="{{ values.manual_ip_address }}" placeholder="例: 192.168.10.25"></div>
+              <div class="field" id="target-subnet-field"><label for="target_subnet">対象サブネット<span class="required-mark">*</span></label><select id="target_subnet" name="target_subnet" required>{% for value, label in subnet_options %}<option value="{{ value }}" {% if values.target_subnet == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select><div class="help">IP 採番の対象です。</div></div>
 			        <div class="field"><label for="subject">Redmineチケット名<span class="required-mark">*</span></label><input id="subject" name="subject" value="{{ values.subject }}" required></div>
 			        <div class="field"><label for="assignee_name">担当者</label><input id="assignee_name" name="assignee_name" value="{{ values.assignee_name }}" list="assignee_names"><datalist id="assignee_names">{% for name in assignee_names %}<option value="{{ name }}"></option>{% endfor %}</datalist></div>
               <div class="field"><label for="start_date">開始日</label><input id="start_date" name="start_date" type="date" value="{{ values.start_date }}"></div>
@@ -177,7 +182,7 @@
               <div class="field full"><label for="description">説明文</label><textarea id="description" name="description">{{ values.description }}</textarea></div>
 			        <div class="field"><label for="vm_name">仮想マシン名<span class="required-mark">*</span></label><input id="vm_name" name="vm_name" value="{{ values.vm_name }}" required></div>
 			        <div class="field"><label for="os_value">OS</label><select id="os_value" name="os_value"><option value="">未選択</option>{% for value, label in os_options %}<option value="{{ value }}" {% if values.os_value == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
-              <div class="field"><label for="vhost_ip">IPアドレス（仮想ホスト）</label><select id="vhost_ip" name="vhost_ip"><option value="">未選択</option>{% for value, label in vhost_options %}<option value="{{ value }}" {% if values.vhost_ip == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
+              <div class="field"><label for="vhost_ip">IPアドレス（仮想ホスト）</label><select id="vhost_ip" name="vhost_ip"><option value="">未選択</option>{% for value, label in vhost_options %}<option value="{{ value }}" {% if values.vhost_ip == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select><div class="help">複製先ホストとしても使用します。表示に「(Hyper-v)」が付く候補はそのまま選択できます。</div></div>
               <div class="field"><label for="os_user">OSユーザー</label><input id="os_user" name="os_user" value="{{ values.os_user }}"></div>
               <div class="field"><label for="os_password">OSパスワード</label><input id="os_password" name="os_password" type="password" value="{{ values.os_password }}"></div>
               <div class="field"><label for="os_product_key">OSプロダクトキー</label><input id="os_product_key" name="os_product_key" value="{{ values.os_product_key }}"></div>
@@ -189,7 +194,7 @@
               <div class="field"><label for="notes">特記事項</label><input id="notes" name="notes" value="{{ values.notes }}"></div>
         </div>
       <h2 class="section-title">仮想マシン</h2>
-		  <p class="section-subtitle">必要項目を入力し、確認画面で内容を確認してから登録してください。</p>
+    		  <p class="section-subtitle">VM作成に必要な項目を入力してください。</p>
         <div class="field full" style="padding: 14px; border-radius: 15px; background: #fef2f2; border: 1px solid #fecaca; margin-bottom: 18px;">
           <label class="check-item" style="margin-bottom: 0;">
             <input type="checkbox" name="debug_ticket_only" {% if values.debug_ticket_only %}checked{% endif %}>
@@ -200,91 +205,114 @@
           </div>
         </div>
         <div class="field"><label for="deploy_type">作成方法<span class="required-mark">*</span></label><select id="deploy_type" name="deploy_type" required><option value="template" {% if values.deploy_type == "template" %}selected{% endif %}>テンプレートから作成</option><option value="manual" {% if values.deploy_type == "manual" %}selected{% endif %}>手動作成</option></select></div>
-        <div id="deploy-dependent-fields">
-          <div class="field" id="template-field"><label for="vm_template">VMテンプレート</label><select id="vm_template" name="vm_template" required><option value="">未選択</option>{% for value, label in template_options %}<option value="{{ value }}" {% if values.vm_template == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
-          <div id="manual-fields">
-            <div class="manual-card">
-              <h3 class="manual-subtitle">仮想プロセッサ</h3>
-              <div class="manual-grid">
-                <div class="field">
-                  <label for="vcpu_count">カウント</label>
-                  <input id="vcpu_count" name="vcpu_count" value="{{ values.vcpu_count }}" inputmode="numeric" pattern="[0-9]*" required>
-                </div>
-                <div class="field full">
-                  <label class="checkbox-row" title="仮想マシン内で仮想マシンを使用する場合はチェックを入れる">
-                    <input type="checkbox" id="enable_nested_virtualization" name="enable_nested_virtualization" {% if values.enable_nested_virtualization %}checked{% endif %}>
-                    入れ子になった仮想化を有効にする。
-                  </label>
-                </div>
-              </div>
-            </div>
-
-            <div class="manual-card">
-              <h3 class="manual-subtitle">メモリ</h3>
-              <div class="manual-grid">
-                <div class="field">
-                  <label for="startup_memory">起動メモリ</label>
-                  <input id="startup_memory" name="startup_memory" value="{{ values.startup_memory }}" inputmode="numeric" pattern="[0-9]*" required>
-                </div>
-                <div class="field">
-                  <label for="memory_unit">サイズの単位</label>
-                  <select id="memory_unit" name="memory_unit" required>
-                    <option value="GB" {% if values.memory_unit == 'GB' %}selected{% endif %}>GB</option>
-                    <option value="MB" {% if values.memory_unit == 'MB' %}selected{% endif %}>MB</option>
-                  </select>
-                </div>
-                <div class="field full">
-                  <label class="checkbox-row" title="原則使用しない">
-                    <input type="checkbox" id="use_dynamic_memory" name="use_dynamic_memory" {% if values.use_dynamic_memory %}checked{% endif %}>
-                    動的メモリを使用する
-                  </label>
-                </div>
-              </div>
-            </div>
-
-            <div class="manual-card">
-              <h3 class="manual-subtitle">ネットワーク</h3>
-              <div class="field">
-                <label for="virtual_switch">仮想スイッチ</label>
-                <select id="virtual_switch" name="virtual_switch" required>
-                  <option value="">未選択</option>
-                  {% for value, label in vm_switch_options %}
-                  <option value="{{ value }}" {% if values.virtual_switch == value %}selected{% endif %}>{{ label }}</option>
-                  {% endfor %}
-                </select>
-                <div class="help">表示形式: ホスト名|仮想スイッチ</div>
-              </div>
-            </div>
-
-            <div class="manual-card">
-              <h3 class="manual-subtitle">ストレージ</h3>
-              <input type="hidden" id="manual_disks_json" name="manual_disks_json" value="{{ values.manual_disks_json }}">
-              <div id="storage-disks"></div>
-              <button class="small-button" type="button" id="add-disk-button">追加</button>
-            </div>
-
-            <div class="manual-card">
-              <h3 class="manual-subtitle">オペレーティングシステム</h3>
-              <div class="radio-group">
-                <label class="radio-item">
-                  <input type="radio" name="os_install_mode" value="later" {% if values.os_install_mode != 'iso' %}checked{% endif %}>
-                  後でオペレーティングシステムをインストールする
-                </label>
-                <label class="radio-item">
-                  <input type="radio" name="os_install_mode" value="iso" {% if values.os_install_mode == 'iso' %}checked{% endif %}>
-                  画像ファイル（.iso）からオペレーティングシステムをインストールする
+        <div id="deploy-dependent-fields" class="form-section">
+          <div class="form-section-body">
+            <div id="template-field">
+              <div class="field"><label for="clone_host_ip">複製先ホスト<span class="required-mark">*</span></label><select id="clone_host_ip" name="clone_host_ip" required><option value="">未選択</option>{% for value, label in clone_host_options %}<option value="{{ value }}" {% if values.clone_host_ip == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select><div class="help">テンプレートの配置先ではなく、実際に複製を実行する Hyper-V ホストを選びます。</div></div>
+              <div class="field"><label for="vm_template">VMテンプレート</label><select id="vm_template" name="vm_template" required><option value="">未選択</option>{% for value, label in template_options %}<option value="{{ value }}" {% if values.vm_template == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select><div class="help">候補には配置ホストを併記しています。</div></div>
+              <div class="field full" style="margin-top: 10px;">
+                <label class="checkbox-row">
+                  <input type="checkbox" id="template_iso_mount" name="template_iso_mount" {% if values.template_iso_mount %}checked{% endif %}>
+                  ISOイメージをマウントする
                 </label>
               </div>
-              <div class="field" id="iso-path-field" style="margin-top: 10px;">
-                <label for="os_iso_path">パス</label>
+              <div class="field" id="template-iso-path-field" style="margin-top: 8px;">
+                <label for="template_iso_path">ISO パス</label>
                 <div class="path-picker">
-                  <input id="os_iso_path" name="os_iso_path" value="{{ values.os_iso_path }}">
-                  <button class="small-button" type="button" id="browse-iso-button">参照</button>
+                  <input id="template_iso_path" name="template_iso_path" value="{{ values.template_iso_path }}" placeholder="X:\path\to\image.iso">
+                  <button class="small-button" type="button" id="browse-template-iso-button">参照</button>
+                </div>
+                <div class="help">ホスト上のISOファイルパスを入力または参照してください。</div>
+              </div>
+            </div>
+            <div id="manual-fields">
+              <div class="manual-card">
+                <h3 class="manual-subtitle">仮想プロセッサ</h3>
+                <div class="manual-grid">
+                  <div class="field">
+                    <label for="vcpu_count">カウント</label>
+                    <input id="vcpu_count" name="vcpu_count" value="{{ values.vcpu_count }}" inputmode="numeric" pattern="[0-9]*" required>
+                  </div>
+                  <div class="field full">
+                    <label class="checkbox-row" title="仮想マシン内で仮想マシンを使用する場合はチェックを入れる">
+                      <input type="checkbox" id="enable_nested_virtualization" name="enable_nested_virtualization" {% if values.enable_nested_virtualization %}checked{% endif %}>
+                      入れ子になった仮想化を有効にする。
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <div class="manual-card">
+                <h3 class="manual-subtitle">メモリ</h3>
+                <div class="manual-grid">
+                  <div class="field">
+                    <label for="startup_memory">起動メモリ</label>
+                    <input id="startup_memory" name="startup_memory" value="{{ values.startup_memory }}" inputmode="numeric" pattern="[0-9]*" required>
+                  </div>
+                  <div class="field">
+                    <label for="memory_unit">サイズの単位</label>
+                    <select id="memory_unit" name="memory_unit" required>
+                      <option value="GB" {% if values.memory_unit == 'GB' %}selected{% endif %}>GB</option>
+                      <option value="MB" {% if values.memory_unit == 'MB' %}selected{% endif %}>MB</option>
+                    </select>
+                  </div>
+                  <div class="field full">
+                    <label class="checkbox-row" title="原則使用しない">
+                      <input type="checkbox" id="use_dynamic_memory" name="use_dynamic_memory" {% if values.use_dynamic_memory %}checked{% endif %}>
+                      動的メモリを使用する
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <div class="manual-card">
+                <h3 class="manual-subtitle">ネットワーク</h3>
+                <div class="field">
+                  <label for="virtual_switch">仮想スイッチ</label>
+                  <select id="virtual_switch" name="virtual_switch" required>
+                    <option value="">未選択</option>
+                    {% for value, label in vm_switch_options %}
+                    <option value="{{ value }}" {% if values.virtual_switch == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                  </select>
+                  <div class="help">表示形式: ホスト名|仮想スイッチ</div>
+                </div>
+                <div class="field" id="vlan-field" style="margin-top: 10px;">
+                  <label for="vlan_id">VLAN ID</label>
+                  <input id="vlan_id" name="vlan_id" value="{{ values.vlan_id }}" inputmode="numeric" pattern="[0-9]*" placeholder="1 - 4094">
+                  <div class="help">仮想スイッチを選択したあとに設定できます。未入力ならVLAN未設定のまま作成します。</div>
+                </div>
+              </div>
+
+              <div class="manual-card">
+                <h3 class="manual-subtitle">ストレージ</h3>
+                <input type="hidden" id="manual_disks_json" name="manual_disks_json" value="{{ values.manual_disks_json }}">
+                <div id="storage-disks"></div>
+                <button class="small-button" type="button" id="add-disk-button">追加</button>
+              </div>
+
+              <div class="manual-card">
+                <h3 class="manual-subtitle">オペレーティングシステム</h3>
+                <div class="radio-group">
+                  <label class="radio-item">
+                    <input type="radio" name="os_install_mode" value="later" {% if values.os_install_mode != 'iso' %}checked{% endif %}>
+                    後でオペレーティングシステムをインストールする
+                  </label>
+                  <label class="radio-item">
+                    <input type="radio" name="os_install_mode" value="iso" {% if values.os_install_mode == 'iso' %}checked{% endif %}>
+                    画像ファイル（.iso）からオペレーティングシステムをインストールする
+                  </label>
+                </div>
+                <div class="field" id="iso-path-field" style="margin-top: 10px;">
+                  <label for="os_iso_path">パス</label>
+                  <div class="path-picker">
+                    <input id="os_iso_path" name="os_iso_path" value="{{ values.os_iso_path }}">
+                    <button class="small-button" type="button" id="browse-iso-button">参照</button>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
-        </div>
         </div>
 
 						<div class="actions">
@@ -304,7 +332,7 @@
           <h3>処理の流れ</h3>
           <ul>
 						<li>必要項目を入力して登録ボタンを押します。</li>
-						<li>対象サブネットに応じて IP が自動で割り当てられます。</li>
+						<li>IP割当方法で自動採番または手動入力を選択できます。</li>
 						<li>登録結果が画面に表示されます。</li>
           </ul>
         </section>
@@ -338,8 +366,29 @@
       var deployType = document.getElementById('deploy_type');
       var templateField = document.getElementById('template-field');
       var manualFields = document.getElementById('manual-fields');
+      var ipAssignmentMode = document.getElementById('ip_assignment_mode');
+      var manualIpField = document.getElementById('manual-ip-field');
+      var manualIpInput = document.getElementById('manual_ip_address');
+      var targetSubnetField = document.getElementById('target-subnet-field');
+      var targetSubnetInput = document.getElementById('target_subnet');
       if (!deployType || !templateField || !manualFields) {
         return;
+      }
+
+      function updateIpAssignmentField() {
+        if (!ipAssignmentMode || !manualIpField || !manualIpInput) {
+          return;
+        }
+        var isManual = ipAssignmentMode.value === 'manual';
+        manualIpField.style.display = isManual ? '' : 'none';
+        manualIpInput.disabled = !isManual;
+        manualIpInput.required = isManual;
+
+        if (targetSubnetField && targetSubnetInput) {
+          targetSubnetField.style.display = isManual ? 'none' : '';
+          targetSubnetInput.disabled = isManual;
+          targetSubnetInput.required = !isManual;
+        }
       }
 
       function toggleRequired(elements, shouldRequire) {
@@ -368,6 +417,34 @@
         var isTemplate = deployType.value === 'template';
         setSectionVisibility(templateField, isTemplate);
         setSectionVisibility(manualFields, !isTemplate);
+        updateTemplateIsoField();
+        updateVlanField();
+      }
+
+      function updateTemplateIsoField() {
+        var mountCheck = document.getElementById('template_iso_mount');
+        var pathField = document.getElementById('template-iso-path-field');
+        var pathInput = document.getElementById('template_iso_path');
+        if (!mountCheck || !pathField || !pathInput) {
+          return;
+        }
+        var isTemplate = deployType.value === 'template';
+        var shouldShow = isTemplate && mountCheck.checked;
+        pathField.style.display = shouldShow ? '' : 'none';
+        pathInput.disabled = !shouldShow;
+      }
+
+      function updateVlanField() {
+        var vlanField = document.getElementById('vlan-field');
+        var vlanInput = document.getElementById('vlan_id');
+        var virtualSwitch = document.getElementById('virtual_switch');
+        if (!vlanField || !vlanInput || !virtualSwitch) {
+          return;
+        }
+
+        var shouldEnable = manualFields.style.display !== 'none' && !!virtualSwitch.value;
+        vlanField.style.opacity = shouldEnable ? '1' : '0.6';
+        vlanInput.disabled = !shouldEnable;
       }
 
       function onlyDigits(value) {
@@ -404,6 +481,7 @@
       var storageContainer = document.getElementById('storage-disks');
       var manualDisksInput = document.getElementById('manual_disks_json');
       var addDiskButton = document.getElementById('add-disk-button');
+      var virtualSwitchInput = document.getElementById('virtual_switch');
       var browserModal = document.getElementById('host-path-browser');
       var browserList = document.getElementById('browser-list');
       var browserPath = document.getElementById('browser-path');
@@ -680,6 +758,10 @@
         });
       }
 
+      if (virtualSwitchInput) {
+        virtualSwitchInput.addEventListener('change', updateVlanField);
+      }
+
       var isoField = document.getElementById('iso-path-field');
       var isoPathInput = document.getElementById('os_iso_path');
       var browseIsoButton = document.getElementById('browse-iso-button');
@@ -734,8 +816,25 @@
       });
 
       deployType.addEventListener('change', updateDeployFields);
+      if (ipAssignmentMode) {
+        ipAssignmentMode.addEventListener('change', updateIpAssignmentField);
+      }
+      var templateIsoMountCheck = document.getElementById('template_iso_mount');
+      if (templateIsoMountCheck) {
+        templateIsoMountCheck.addEventListener('change', updateTemplateIsoField);
+      }
+      var browseTemplateIsoButton = document.getElementById('browse-template-iso-button');
+      var templateIsoPathInput = document.getElementById('template_iso_path');
+      if (browseTemplateIsoButton && templateIsoPathInput) {
+        browseTemplateIsoButton.addEventListener('click', function () {
+          openBrowser('iso', templateIsoPathInput.value || 'X:\\', function (selectedPath) {
+            templateIsoPathInput.value = selectedPath;
+          });
+        });
+      }
       renderDisks();
       updateIsoField();
+      updateIpAssignmentField();
       updateDeployFields();
     })();
   </script>
