@@ -172,16 +172,18 @@
           </div>
         </div>
         <div class="field"><label for="deploy_type">作成方法<span class="required-mark">*</span></label><select id="deploy_type" name="deploy_type" required><option value="template" {% if values.deploy_type == "template" %}selected{% endif %}>テンプレートから作成</option><option value="manual" {% if values.deploy_type == "manual" %}selected{% endif %}>手動作成</option></select></div>
-        <div class="field" id="template-field"><label for="vm_template">VMテンプレート</label><select id="vm_template" name="vm_template"><option value="">未選択</option>{% for value, label in template_options %}<option value="{{ value }}" {% if values.vm_template == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
-      <div id="manual-fields">
-        <div class="field"><label>メモリ(GB)</label><input type="number" name="memory" value="{{ values.memory or 2 }}"></div>
-        <div class="field"><label>ディスク(GB)</label><input type="number" name="disk" value="{{ values.disk or 40 }}"></div>
-        <div class="field"><label>CPU数</label><input type="number" name="cpu" value="{{ values.cpu or 2 }}"></div>
-        <div class="field">
-          <label>仮想スイッチ</label>
-          <input type="text" name="switch" value="{{ values.switch or 'Default Switch' }}">
+        <div id="deploy-dependent-fields">
+          <div class="field" id="template-field"><label for="vm_template">VMテンプレート</label><select id="vm_template" name="vm_template"><option value="">未選択</option>{% for value, label in template_options %}<option value="{{ value }}" {% if values.vm_template == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
+          <div id="manual-fields">
+            <div class="field"><label>メモリ(GB)</label><input type="number" name="memory" value="{{ values.memory or 2 }}"></div>
+            <div class="field"><label>ディスク(GB)</label><input type="number" name="disk" value="{{ values.disk or 40 }}"></div>
+            <div class="field"><label>CPU数</label><input type="number" name="cpu" value="{{ values.cpu or 2 }}"></div>
+            <div class="field">
+              <label>仮想スイッチ</label>
+              <input type="text" name="switch" value="{{ values.switch or 'Default Switch' }}">
+            </div>
+          </div>
         </div>
-      </div>
         </div>
 
 						<div class="actions">
@@ -216,5 +218,46 @@
       </aside>
     </div>
   </main>
+  <script>
+    (function () {
+      var deployType = document.getElementById('deploy_type');
+      var templateField = document.getElementById('template-field');
+      var manualFields = document.getElementById('manual-fields');
+      if (!deployType || !templateField || !manualFields) {
+        return;
+      }
+
+      function toggleRequired(elements, shouldRequire) {
+        elements.forEach(function (el) {
+          if (shouldRequire) {
+            if (el.dataset.wasRequired === 'true') {
+              el.required = true;
+            }
+          } else {
+            el.dataset.wasRequired = el.required ? 'true' : 'false';
+            el.required = false;
+          }
+        });
+      }
+
+      function setSectionVisibility(section, show) {
+        var inputs = section.querySelectorAll('input, select, textarea');
+        section.style.display = show ? '' : 'none';
+        inputs.forEach(function (el) {
+          el.disabled = !show;
+        });
+        toggleRequired(Array.from(inputs), show);
+      }
+
+      function updateDeployFields() {
+        var isTemplate = deployType.value === 'template';
+        setSectionVisibility(templateField, isTemplate);
+        setSectionVisibility(manualFields, !isTemplate);
+      }
+
+      deployType.addEventListener('change', updateDeployFields);
+      updateDeployFields();
+    })();
+  </script>
 </body>
 </html>
