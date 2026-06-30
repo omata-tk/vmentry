@@ -1,10 +1,48 @@
 import os
 import hashlib
+import re
 import sqlite3
 from pathlib import Path
 
 
 DEFAULT_MASTER_OPTIONS = {}
+
+
+_VM_TEMPLATE_MANGLE_RE = re.compile(r'^\?+VMEntry_template\?+(.*)', re.DOTALL)
+
+
+def _normalize_vm_template_option_text(text):
+    value = (text or '').strip()
+    if not value:
+        return value
+    if value.startswith('【VMEntry_template】'):
+        return value
+    m = _VM_TEMPLATE_MANGLE_RE.match(value)
+    if m:
+        return '【VMEntry_template】' + m.group(1)
+    return value
+
+
+def _repair_vm_template_brackets(conn):
+    """起動時マイグレーション: DB内の vm_template 名で【】が??化されたものを修正する。"""
+    rows = conn.execute(
+        "SELECT option_value, option_label FROM master_options "
+        "WHERE category = 'vm_template' "
+        "AND option_value LIKE '%VMEntry_template%' "
+        "AND option_value NOT LIKE '【VMEntry_template】%'"
+    ).fetchall()
+    for row in rows:
+        old_value = row['option_value']
+        old_label = row['option_label']
+        m_v = _VM_TEMPLATE_MANGLE_RE.match(old_value)
+        new_value = ('【VMEntry_template】' + m_v.group(1)) if m_v else old_value
+        m_l = _VM_TEMPLATE_MANGLE_RE.match(old_label)
+        new_label = ('【VMEntry_template】' + m_l.group(1)) if m_l else old_label
+        conn.execute(
+            "UPDATE master_options SET option_value = ?, option_label = ? "
+            "WHERE category = 'vm_template' AND option_value = ?",
+            (new_value, new_label, old_value),
+        )
 
 
 def _db_path():
@@ -63,6 +101,9 @@ def init_db():
 
         # 90日より古いログを削除
         _prune_old_logs(conn, days=90)
+
+        # vm_template 名の【】文字化け修正
+        _repair_vm_template_brackets(conn)
 
         for category, options in DEFAULT_MASTER_OPTIONS.items():
             for sort_order, (option_value, option_label) in enumerate(options):
@@ -149,6 +190,14 @@ def get_master_options(category):
             """,
             (category,),
         ).fetchall()
+    if category == 'vm_template':
+        return [
+            (
+                _normalize_vm_template_option_text(row['option_value']),
+                _normalize_vm_template_option_text(row['option_label']),
+            )
+            for row in rows
+        ]
     return [(row['option_value'], row['option_label']) for row in rows]
 
 
@@ -159,6 +208,9 @@ def replace_master_options(category, options, updated_by='system'):
             (updated_by, category),
         )
         for sort_order, (option_value, option_label) in enumerate(options):
+            if category == 'vm_template':
+                option_value = _normalize_vm_template_option_text(option_value)
+                option_label = _normalize_vm_template_option_text(option_label)
             conn.execute(
                 """
                 INSERT INTO master_options (
@@ -200,6 +252,28 @@ def get_subnet_vlan_map():
     return result
 
 
+def get_subnet_gateway_map():
+    result = {}
+    for subnet_prefix, gateway_text in get_master_options('subnet_gateway'):
+        subnet = (subnet_prefix or '').strip()
+        gateway = (gateway_text or '').strip()
+        if not subnet or not gateway:
+            continue
+        result[subnet] = gateway
+    return result
+
+
+def get_subnet_dns_map():
+    result = {}
+    for subnet_prefix, dns_text in get_master_options('subnet_dns'):
+        subnet = (subnet_prefix or '').strip()
+        dns = (dns_text or '').strip()
+        if not subnet or not dns:
+            continue
+        result[subnet] = dns
+    return result
+
+
 def get_hidden_subnet_set():
     hidden = set()
     for option_value, _ in get_master_options('subnet_hidden'):
@@ -223,6 +297,20 @@ def get_vlan_id_for_subnet(subnet_prefix):
     if not subnet:
         return ''
     return get_subnet_vlan_map().get(subnet, '')
+
+
+def get_gateway_for_subnet(subnet_prefix):
+    subnet = (subnet_prefix or '').strip()
+    if not subnet:
+        return ''
+    return get_subnet_gateway_map().get(subnet, '')
+
+
+def get_dns_for_subnet(subnet_prefix):
+    subnet = (subnet_prefix or '').strip()
+    if not subnet:
+        return ''
+    return get_subnet_dns_map().get(subnet, '')
 
 
 def _normalize_log_type(log_type):
@@ -372,3 +460,57 @@ def set_admin_key(raw_key: str) -> None:
 def is_admin_key(raw_text):
     stored = get_setting('admin_magic_key', '')
     return bool(stored) and _hash_key((raw_text or '').strip()) == stored
+
+
+# ──────────────────────────────────────────────
+# テンプレートごとの Sysprep 認証情報
+# ──────────────────────────────────────────────
+
+def get_template_sysprep_credentials():
+    """
+    登録済みのテンプレート認証情報を返す。
+    Returns: [(template_name, os_user, os_password_encrypted), ...]
+    """
+    users = {v: l for v, l in get_master_options('template_sysprep_user')}
+    passwords = {v: l for v, l in get_master_options('template_sysprep_password')}
+    result = []
+    for template_name, os_user in users.items():
+        result.append({
+            'template_name': template_name,
+            'os_user': os_user,
+            'os_password': _decrypt_password(passwords.get(template_name, '')),
+        })
+    return result
+
+
+def get_template_sysprep_user(template_name):
+    """テンプレート名に対応した OS ユーザーを返す（なければ空文字）。"""
+    users = dict(get_master_options('template_sysprep_user'))
+    return users.get((template_name or '').strip(), '')
+
+
+def get_template_sysprep_password(template_name):
+    """テンプレート名に対応した OS パスワードを返す（復号済み、なければ空文字）。"""
+    passwords = dict(get_master_options('template_sysprep_password'))
+    encrypted = passwords.get((template_name or '').strip(), '')
+    return _decrypt_password(encrypted)
+
+
+def replace_template_sysprep_credentials(rows, updated_by='system'):
+    """
+    テンプレート認証情報を一括置換する。
+    rows: [{'template_name': str, 'os_user': str, 'os_password': str}, ...]
+    """
+    user_options = []
+    password_options = []
+    for row in rows:
+        name = (row.get('template_name') or '').strip()
+        user = (row.get('os_user') or '').strip()
+        raw_password = (row.get('os_password') or '').strip()
+        if not name:
+            continue
+        user_options.append((name, user))
+        encrypted = _encrypt_password(raw_password) if raw_password else ''
+        password_options.append((name, encrypted))
+    replace_master_options('template_sysprep_user', user_options, updated_by=updated_by)
+    replace_master_options('template_sysprep_password', password_options, updated_by=updated_by)

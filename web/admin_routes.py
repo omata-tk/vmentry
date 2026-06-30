@@ -208,6 +208,44 @@ def _normalize_vlan_text(vlan_text):
     return str(vlan_int), None
 
 
+def _is_valid_ipv4_text(ip_text):
+    text = (ip_text or "").strip()
+    parts = text.split(".")
+    if len(parts) != 4:
+        return False
+    if not all(part.isdigit() for part in parts):
+        return False
+    try:
+        octets = [int(part) for part in parts]
+    except ValueError:
+        return False
+    return all(0 <= value <= 255 for value in octets)
+
+
+def _normalize_gateway_text(gateway_text):
+    text = (gateway_text or "").strip()
+    if not text:
+        return "", None
+    if not _is_valid_ipv4_text(text):
+        return "", "ゲートウェイはIPv4形式で入力してください。"
+    return text, None
+
+
+def _normalize_dns_text(dns_text):
+    text = (dns_text or "").strip()
+    if not text:
+        return "", None
+
+    items = [item.strip() for item in text.split(",") if item.strip()]
+    if not items:
+        return "", None
+
+    invalid_items = [item for item in items if not _is_valid_ipv4_text(item)]
+    if invalid_items:
+        return "", f"DNS はIPv4形式をカンマ区切りで入力してください: {', '.join(invalid_items)}"
+    return ", ".join(items), None
+
+
 def _sort_subnet_prefixes(prefixes):
     def _sort_key(prefix):
         try:
@@ -222,6 +260,8 @@ def _build_subnet_vlan_rows():
     hidden_subnets = db.get_hidden_subnet_set()
     current_subnets = [value for value, _ in CURRENT_SUBNET_OPTIONS if (value or "").strip()]
     subnet_vlan_map = db.get_subnet_vlan_map()
+    subnet_gateway_map = db.get_subnet_gateway_map()
+    subnet_dns_map = db.get_subnet_dns_map()
     all_subnets = []
     seen = set()
 
@@ -247,28 +287,34 @@ def _build_subnet_vlan_rows():
             {
                 "subnet_prefix": subnet,
                 "vlan_id": (subnet_vlan_map.get(subnet) or "").strip(),
+                "gateway": (subnet_gateway_map.get(subnet) or "").strip(),
+                "dns": (subnet_dns_map.get(subnet) or "").strip(),
             }
         )
 
-    rows.append({"subnet_prefix": "", "vlan_id": ""})
+    rows.append({"subnet_prefix": "", "vlan_id": "", "gateway": "", "dns": ""})
     return rows
 
 
 def _build_rows_from_form(form):
     prefixes = form.getlist("subnet_prefix")
     vlans = form.getlist("subnet_vlan_id")
-    row_count = max(len(prefixes), len(vlans), 1)
+    gateways = form.getlist("subnet_gateway")
+    dns_values = form.getlist("subnet_dns")
+    row_count = max(len(prefixes), len(vlans), len(gateways), len(dns_values), 1)
     rows = []
     for idx in range(row_count):
         rows.append(
             {
                 "subnet_prefix": (prefixes[idx] if idx < len(prefixes) else "").strip(),
                 "vlan_id": (vlans[idx] if idx < len(vlans) else "").strip(),
+                "gateway": (gateways[idx] if idx < len(gateways) else "").strip(),
+                "dns": (dns_values[idx] if idx < len(dns_values) else "").strip(),
             }
         )
 
-    if not rows or rows[-1]["subnet_prefix"] or rows[-1]["vlan_id"]:
-        rows.append({"subnet_prefix": "", "vlan_id": ""})
+    if not rows or rows[-1]["subnet_prefix"] or rows[-1]["vlan_id"] or rows[-1]["gateway"] or rows[-1]["dns"]:
+        rows.append({"subnet_prefix": "", "vlan_id": "", "gateway": "", "dns": ""})
     return rows
 
 
@@ -340,13 +386,17 @@ def register_admin_routes(app):
             try:
                 rows = _build_rows_from_form(request.form)
                 mapping_options = []
+                gateway_options = []
+                dns_options = []
                 seen_subnets = set()
 
                 for row in rows:
                     subnet_prefix = (row.get("subnet_prefix") or "").strip()
                     vlan_text = (row.get("vlan_id") or "").strip()
+                    gateway_text = (row.get("gateway") or "").strip()
+                    dns_text = (row.get("dns") or "").strip()
 
-                    if not subnet_prefix and not vlan_text:
+                    if not subnet_prefix and not vlan_text and not gateway_text and not dns_text:
                         continue
 
                     if not subnet_prefix:
@@ -364,8 +414,20 @@ def register_admin_routes(app):
                     if vlan_error:
                         raise RuntimeError(f"{subnet_prefix}: {vlan_error}")
 
+                    normalized_gateway, gateway_error = _normalize_gateway_text(gateway_text)
+                    if gateway_error:
+                        raise RuntimeError(f"{subnet_prefix}: {gateway_error}")
+
+                    normalized_dns, dns_error = _normalize_dns_text(dns_text)
+                    if dns_error:
+                        raise RuntimeError(f"{subnet_prefix}: {dns_error}")
+
                     if normalized_vlan:
                         mapping_options.append((subnet_prefix, normalized_vlan))
+                    if normalized_gateway:
+                        gateway_options.append((subnet_prefix, normalized_gateway))
+                    if normalized_dns:
+                        dns_options.append((subnet_prefix, normalized_dns))
 
                 active_subnets = _sort_subnet_prefixes(seen_subnets)
                 db.replace_master_options(
@@ -392,8 +454,18 @@ def register_admin_routes(app):
                     mapping_options,
                     updated_by=get_session_user_name(),
                 )
+                db.replace_master_options(
+                    "subnet_gateway",
+                    gateway_options,
+                    updated_by=get_session_user_name(),
+                )
+                db.replace_master_options(
+                    "subnet_dns",
+                    dns_options,
+                    updated_by=get_session_user_name(),
+                )
                 subnet_vlan_rows = _build_subnet_vlan_rows()
-                message = f"サブネット-VLAN対応を保存しました。登録件数: {len(mapping_options)}"
+                message = f"サブネットネットワーク設定を保存しました。登録件数: {len(seen_subnets)}"
             except Exception as exc:
                 subnet_vlan_rows = _build_rows_from_form(request.form)
                 error = str(exc)
@@ -425,10 +497,26 @@ def register_admin_routes(app):
 
                 current_map = db.get_subnet_vlan_map()
                 new_mapping = [(subnet, vlan) for subnet, vlan in current_map.items() if subnet != subnet_to_delete]
+                current_gateway_map = db.get_subnet_gateway_map()
+                new_gateway_mapping = [
+                    (subnet, gateway) for subnet, gateway in current_gateway_map.items() if subnet != subnet_to_delete
+                ]
+                current_dns_map = db.get_subnet_dns_map()
+                new_dns_mapping = [(subnet, dns) for subnet, dns in current_dns_map.items() if subnet != subnet_to_delete]
 
                 db.replace_master_options(
                     "subnet_vlan",
                     new_mapping,
+                    updated_by=get_session_user_name(),
+                )
+                db.replace_master_options(
+                    "subnet_gateway",
+                    new_gateway_mapping,
+                    updated_by=get_session_user_name(),
+                )
+                db.replace_master_options(
+                    "subnet_dns",
+                    new_dns_mapping,
                     updated_by=get_session_user_name(),
                 )
                 CURRENT_SUBNET_OPTIONS.clear()
@@ -441,15 +529,61 @@ def register_admin_routes(app):
                 subnet_vlan_rows = _build_subnet_vlan_rows()
                 error = str(exc)
 
+        if request.method == "POST" and action == "save_template_sysprep":
+            try:
+                names = request.form.getlist("template_sysprep_name")
+                users = request.form.getlist("template_sysprep_user")
+                passwords = request.form.getlist("template_sysprep_password")
+                rows = []
+                for idx, name in enumerate(names):
+                    name = (name or "").strip()
+                    if not name:
+                        continue
+                    user = (users[idx] if idx < len(users) else "").strip()
+                    raw_password = (passwords[idx] if idx < len(passwords) else "").strip()
+                    rows.append({
+                        "template_name": name,
+                        "os_user": user,
+                        "os_password": raw_password,
+                    })
+                db.replace_template_sysprep_credentials(rows, updated_by=get_session_user_name())
+                message = f"テンプレート認証情報を保存しました（{len(rows)} 件）。"
+            except Exception as exc:
+                error = str(exc)
+
         settings_display = dict(db.get_all_settings())
         for i in range(1, 4):
             if settings_display.get(f"hyperv_host{i}_password"):
                 settings_display[f"hyperv_host{i}_password"] = ""
 
+        # ホストから取得済みのテンプレート名と既存認証情報をマージ
+        existing_creds = {
+            row["template_name"]: row
+            for row in db.get_template_sysprep_credentials()
+        }
+        known_template_names = [value for value, _ in CURRENT_VM_TEMPLATE_OPTIONS if value]
+        template_sysprep_rows = []
+        seen = set()
+        for tname in known_template_names:
+            seen.add(tname)
+            cred = existing_creds.get(tname, {})
+            template_sysprep_rows.append({
+                "template_name": tname,
+                "os_user": cred.get("os_user", ""),
+                "os_password": cred.get("os_password", ""),
+            })
+        # 既存登録済みでホスト一覧にないテンプレートも残す
+        for tname, cred in existing_creds.items():
+            if tname not in seen:
+                template_sysprep_rows.append(cred)
+        # 末尾に空白行を追加
+        template_sysprep_rows.append({"template_name": "", "os_user": "", "os_password": ""})
+
         return render_template(
             "admin.html",
             settings=settings_display,
             subnet_vlan_rows=subnet_vlan_rows,
+            template_sysprep_rows=template_sysprep_rows,
             logs=db.get_recent_logs(20),
             message=message,
             error=error,

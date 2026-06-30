@@ -108,15 +108,54 @@
 		</section>
 
 		<section class="card">
-			<h2>サブネット-VLAN対応</h2>
+			<h2>テンプレート Sysprep 認証情報</h2>
 			<p style="margin-top:0; color:#64748b; font-size:.84rem; line-height:1.6;">
-				サブネットごとのVLAN IDを編集します。最下行の空白行から新規追加してください。削除ボタンはサブネット自体を除外リストへ移動し、以後の同期でも表示しません。
+				VMテンプレートごとに Sysprep 実行時のゲスト OS ユーザー / パスワードを登録します。登録済みのテンプレートを選択すると OS ユーザー・パスワードが自動入力されます。最下行の空白行から新規追加できます。
+			</p>
+			<form method="post">
+				<input type="hidden" name="action" value="save_template_sysprep">
+				<div style="max-height: 360px; overflow-y: auto; border: 1px solid #dbe3ee; border-radius: 12px;">
+					<table style="width:100%; border-collapse: collapse;">
+						<thead style="position: sticky; top: 0; background: #fff; border-bottom: 2px solid #0f766e;">
+							<tr>
+								<th style="padding:10px; text-align:left; font-weight:800; color:#0f172a; width:40%;">テンプレート名</th>
+								<th style="padding:10px; text-align:left; font-weight:800; color:#0f172a; width:25%;">OS ユーザー</th>
+								<th style="padding:10px; text-align:left; font-weight:800; color:#0f172a; width:35%;">OS パスワード</th>
+							</tr>
+						</thead>
+						<tbody>
+						{% for row in template_sysprep_rows %}
+							<tr style="border-bottom:1px solid #e2e8f0;">
+								<td style="padding:8px;">
+									<input name="template_sysprep_name" value="{{ row.template_name }}" style="width:100%; box-sizing:border-box;" placeholder="【VMEntry_template】テンプレート名">
+								</td>
+								<td style="padding:8px;">
+									<input name="template_sysprep_user" value="{{ row.os_user }}" style="width:100%; box-sizing:border-box;" placeholder="Administrator">
+								</td>
+								<td style="padding:8px;">
+									<input name="template_sysprep_password" type="password" value="{{ row.os_password }}" style="width:100%; box-sizing:border-box;" placeholder="パスワード">
+								</td>
+							</tr>
+						{% endfor %}
+						</tbody>
+					</table>
+				</div>
+				<div style="margin-top:12px;">
+					<button type="submit">認証情報を保存</button>
+				</div>
+			</form>
+		</section>
+
+		<section class="card">
+			<h2>サブネットネットワーク設定</h2>
+			<p style="margin-top:0; color:#64748b; font-size:.84rem; line-height:1.6;">
+				サブネットごとの VLAN ID / ゲートウェイ / DNS を編集します。最下行の空白行から新規追加してください。削除ボタンはサブネット自体を除外リストへ移動し、以後の同期でも表示しません。
 			</p>
 			<form method="post" id="subnet_vlan_form">
 				<div style="max-height: 400px; overflow-y: auto; border: 1px solid #dbe3ee; border-radius: 12px;">
 					<table style="width:100%; border-collapse: collapse;">
 						<thead style="position: sticky; top: 0; background: #fff; border-bottom: 2px solid #0f766e;">
-							<tr><th style="padding:10px; text-align:left; font-weight:800; color:#0f172a;">サブネット（例: 192.168.10）</th><th style="padding:10px; text-align:left; font-weight:800; color:#0f172a;">VLAN ID（1-4094）</th><th style="padding:10px; text-align:center; font-weight:800; color:#0f172a; width:80px;">操作</th></tr>
+							<tr><th style="padding:10px; text-align:left; font-weight:800; color:#0f172a;">サブネット（例: 192.168.10）</th><th style="padding:10px; text-align:left; font-weight:800; color:#0f172a;">VLAN ID（1-4094）</th><th style="padding:10px; text-align:left; font-weight:800; color:#0f172a;">ゲートウェイ</th><th style="padding:10px; text-align:left; font-weight:800; color:#0f172a;">DNS（カンマ区切り）</th><th style="padding:10px; text-align:center; font-weight:800; color:#0f172a; width:80px;">操作</th></tr>
 						</thead>
 						<tbody>
 						{% for row in subnet_vlan_rows %}
@@ -124,6 +163,8 @@
 								{% if row.subnet_prefix %}
 									<td style="padding:10px;"><input name="subnet_prefix" value="{{ row.subnet_prefix }}" style="width:100%; box-sizing:border-box;" readonly></td>
 									<td style="padding:10px;"><input name="subnet_vlan_id" value="{{ row.vlan_id }}" style="width:100%; box-sizing:border-box;" inputmode="numeric" pattern="[0-9]*" placeholder="100"></td>
+									<td style="padding:10px;"><input name="subnet_gateway" value="{{ row.gateway }}" style="width:100%; box-sizing:border-box;" placeholder="192.168.10.1"></td>
+									<td style="padding:10px;"><input name="subnet_dns" value="{{ row.dns }}" style="width:100%; box-sizing:border-box;" placeholder="192.168.10.10, 192.168.10.11"></td>
 									<td style="padding:10px; text-align:center;">
 										<button
 											type="submit"
@@ -137,6 +178,8 @@
 								{% else %}
 									<td style="padding:10px;"><input name="subnet_prefix" value="" style="width:100%; box-sizing:border-box;" placeholder="192.168.10"></td>
 									<td style="padding:10px;"><input name="subnet_vlan_id" value="" style="width:100%; box-sizing:border-box;" inputmode="numeric" pattern="[0-9]*" placeholder="100"></td>
+									<td style="padding:10px;"><input name="subnet_gateway" value="" style="width:100%; box-sizing:border-box;" placeholder="192.168.10.1"></td>
+									<td style="padding:10px;"><input name="subnet_dns" value="" style="width:100%; box-sizing:border-box;" placeholder="192.168.10.10, 192.168.10.11"></td>
 									<td style="padding:10px; text-align:center;">-</td>
 								{% endif %}
 							</tr>

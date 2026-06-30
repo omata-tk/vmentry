@@ -53,6 +53,7 @@
     .processing-step.complete { color: #166534; }
     .processing-step.waiting { color: #94a3b8; }
     .processing-step.skipped { color: #64748b; }
+    .processing-step.error { color: #b45309; font-weight: 700; }
 
     .pill-row { display: flex; flex-wrap: wrap; gap: 8px; }
     .pill { display: inline-flex; align-items: center; padding: 8px 10px; border-radius: 999px; background: rgba(15,23,42,.06); font-size: .8rem; font-weight: 700; color: #334155; }
@@ -219,9 +220,20 @@
               <div class="field"><label for="vm_template">VMテンプレート</label><select id="vm_template" name="vm_template" required><option value="">未選択</option>{% for value, label in template_options %}<option value="{{ value }}" {% if values.vm_template == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select><div class="help">候補には配置ホストを併記しています。</div></div>
               <div class="field full" style="margin-top: 10px;">
                 <label class="checkbox-row">
+                  <input type="checkbox" id="sysprep_enabled" name="sysprep_enabled" {% if values.sysprep_enabled %}checked{% endif %}>
+                  Sysprep を実行する
+                </label>
+                <div class="help">チェックした場合、複製後に Windows ゲスト内で Sysprep を実行します。</div>
+                <div class="help" style="margin-top:6px; padding:10px 12px; border-radius:12px; background:#fff7ed; border:1px solid #fdba74; color:#9a3412;">
+                  Sysprep 後に設定される項目: ISO イメージのマウント、割当予定 IP アドレス、サブネット設定に紐づくゲートウェイ / DNS、リモートデスクトップ許可
+                </div>
+              </div>
+              <div class="field full" style="margin-top: 10px;">
+                <label class="checkbox-row">
                   <input type="checkbox" id="template_iso_mount" name="template_iso_mount" {% if values.template_iso_mount %}checked{% endif %}>
                   ISOイメージをマウントする
                 </label>
+                <div class="help">Sysprep を実行する場合、この ISO は Sysprep 完了後にマウントされます。</div>
               </div>
               <div class="field" id="template-iso-path-field" style="margin-top: 8px;">
                 <label for="template_iso_path">ISO パス</label>
@@ -369,10 +381,7 @@
       <div style="padding: 24px; text-align: center;">
         <div style="font-size: 3rem; margin-bottom: 12px;">⏳</div>
         <div id="processing-status" style="font-size: 1rem; color: #0f172a; margin-bottom: 16px; font-weight: 600;">処理を開始しています...</div>
-        <div id="processing-steps" style="margin-top: 16px; color: #64748b; font-size: 0.9rem;">
-          <div class="processing-step" data-step="redmine">待機中... チケット作成中</div>
-          <div class="processing-step" data-step="hyperv">待機中... 仮想マシン作成中</div>
-        </div>
+        <div id="processing-steps" style="margin-top: 16px; color: #64748b; font-size: 0.9rem;"></div>
         <div style="margin-top: 18px;">
           <button id="processing-ok" class="small-button" type="button" hidden>OK</button>
         </div>
@@ -485,12 +494,12 @@
       }
 
       function parseInitialDisks() {
-        var manualDisksInput = document.getElementById('manual_disks_json');
-        if (!manualDisksInput || !manualDisksInput.value) {
+        var manualDisksField = document.getElementById('manual_disks_json');
+        if (!manualDisksField || !manualDisksField.value) {
           return [];
         }
         try {
-          var parsed = JSON.parse(manualDisksInput.value);
+          var parsed = JSON.parse(manualDisksField.value);
           if (!Array.isArray(parsed)) {
             return [];
           }
@@ -597,11 +606,17 @@
 
       function loadBrowserPath(pathValue) {
         var targetPath = pathValue || 'X:\\';
+        var preferredHostIp = getPreferredBrowseHostIp();
+        var browseUrl = '/entry/host-browse?kind=' + encodeURIComponent(browserState.kind) + '&path=' + encodeURIComponent(targetPath);
+        if (preferredHostIp) {
+          browseUrl += '&host_ip=' + encodeURIComponent(preferredHostIp);
+        }
         setBrowserMessage('ホストへ接続中...', 'info');
         if (browserPath) {
           browserPath.textContent = targetPath;
         }
-        fetch('/entry/host-browse?kind=' + encodeURIComponent(browserState.kind) + '&path=' + encodeURIComponent(targetPath))
+
+        fetch(browseUrl)
           .then(function (response) {
             return response.json().then(function (json) {
               return { ok: response.ok, body: json };
@@ -641,6 +656,27 @@
           browserModal.hidden = false;
         }
         loadBrowserPath(browserState.currentPath);
+      }
+
+      function getPreferredBrowseHostIp() {
+        var deployTypeInput = document.getElementById('deploy_type');
+        var cloneHostInput = document.getElementById('clone_host_ip');
+        var vhostInput = document.getElementById('vhost_ip');
+
+        var deployType = deployTypeInput ? String(deployTypeInput.value || '').trim() : '';
+        var cloneHostIp = cloneHostInput ? String(cloneHostInput.value || '').trim() : '';
+        var vhostIp = vhostInput ? String(vhostInput.value || '').trim() : '';
+
+        if (deployType === 'template' && cloneHostIp) {
+          return cloneHostIp;
+        }
+        if (vhostIp) {
+          return vhostIp;
+        }
+        if (cloneHostIp) {
+          return cloneHostIp;
+        }
+        return '';
       }
 
       function createDiskCard(disk, idx) {
@@ -852,10 +888,12 @@
       if (ipAssignmentMode) {
         ipAssignmentMode.addEventListener('change', updateIpAssignmentField);
       }
+
       var templateIsoMountCheck = document.getElementById('template_iso_mount');
       if (templateIsoMountCheck) {
         templateIsoMountCheck.addEventListener('change', updateTemplateIsoField);
       }
+
       var browseTemplateIsoButton = document.getElementById('browse-template-iso-button');
       var templateIsoPathInput = document.getElementById('template_iso_path');
       if (browseTemplateIsoButton && templateIsoPathInput) {
@@ -865,12 +903,12 @@
           });
         });
       }
+
       renderDisks();
       updateIsoField();
       updateIpAssignmentField();
       updateDeployFields();
 
-      // チケットのみ作成：チェック時にVM作成セクションを非表示・必須解除
       var ticketOnlyCheck = document.getElementById('ticket_only');
       var vmCreationSection = document.getElementById('vm-creation-section');
       var vmNameField = document.getElementById('vm_name');
@@ -901,7 +939,6 @@
       }
     })();
 
-    // 処理進捗表示とブラウザバック防止
     (function () {
       var processingModal = document.getElementById('processing-modal');
       var processingStatus = document.getElementById('processing-status');
@@ -910,79 +947,106 @@
       var form = document.getElementById('entry-create-form');
       var preventNavigation = false;
       var inFlight = false;
-      var progressTimer = null;
-      var pendingResultHtml = '';
+      var pollTimer = null;
+      var pendingRedirectUrl = '';
+      var activeJobId = '';
 
       if (!form || !processingModal || !processingSteps || !processingStatus || !processingOk) {
         return;
       }
 
-      function setStep(stepKey, text, className) {
-        var node = processingSteps.querySelector('[data-step="' + stepKey + '"]');
-        if (!node) {
+      function stopPolling() {
+        if (pollTimer) {
+          window.clearTimeout(pollTimer);
+          pollTimer = null;
+        }
+      }
+
+      function renderSteps(steps) {
+        processingSteps.innerHTML = '';
+        (steps || []).forEach(function (step) {
+          var row = document.createElement('div');
+          var stateLabel = '待機中';
+          if (step.status === 'active') {
+            stateLabel = '実行中';
+          } else if (step.status === 'complete') {
+            stateLabel = '完了';
+          } else if (step.status === 'error') {
+            stateLabel = '失敗';
+          } else if (step.status === 'skipped') {
+            stateLabel = 'スキップ';
+          }
+          row.className = 'processing-step ' + (step.status || 'waiting');
+          row.textContent = stateLabel + '... ' + step.label;
+          processingSteps.appendChild(row);
+        });
+      }
+
+      function renderJob(job) {
+        if (!job) {
           return;
         }
-        node.textContent = text;
-        node.className = 'processing-step ' + className;
-      }
 
-      function stopProgressTicker() {
-        if (progressTimer) {
-          window.clearInterval(progressTimer);
-          progressTimer = null;
+        processingStatus.textContent = job.message || '処理中です。';
+        renderSteps(job.steps || []);
+        pendingRedirectUrl = job.redirect_url || pendingRedirectUrl;
+
+        if (job.status === 'success') {
+          stopPolling();
+          processingStatus.textContent = '完了しました。OKで結果を表示します。';
+          processingOk.hidden = false;
+          preventNavigation = false;
+          inFlight = false;
+          return;
         }
-      }
 
-      function startProgressTicker(debugTicketOnly) {
-        var vmPhaseStarted = false;
-        stopProgressTicker();
-        progressTimer = window.setInterval(function () {
-          if (debugTicketOnly) {
-            setStep('redmine', '実行中... チケット作成中', 'active');
-            setStep('hyperv', '仮想マシン作成はスキップしました', 'skipped');
-            processingStatus.textContent = '現在実行中: チケット作成中';
-            return;
-          }
-
-          if (!vmPhaseStarted) {
-            vmPhaseStarted = true;
-            setStep('redmine', '完了: チケット作成中', 'complete');
-            setStep('hyperv', '実行中... 仮想マシン作成中', 'active');
-            processingStatus.textContent = '現在実行中: 仮想マシン作成中';
-            return;
-          }
-
-          setStep('redmine', '完了: チケット作成中', 'complete');
-          setStep('hyperv', '実行中... 仮想マシン作成中', 'active');
-          processingStatus.textContent = '現在実行中: 仮想マシン作成中';
-        }, 2500);
-      }
-
-      function applyInitialSteps(debugTicketOnly) {
-        setStep('redmine', '実行中... チケット作成中', 'active');
-        if (debugTicketOnly) {
-          setStep('hyperv', '仮想マシン作成はスキップしました', 'skipped');
-        } else {
-          setStep('hyperv', '待機中... 仮想マシン作成中', 'waiting');
+        if (job.status === 'error') {
+          stopPolling();
+          processingStatus.textContent = (job.error || job.message || '処理に失敗しました。') + ' OKで結果を表示します。';
+          processingOk.hidden = false;
+          preventNavigation = false;
+          inFlight = false;
+          return;
         }
+
         processingOk.hidden = true;
       }
 
-      function finishSteps(success, debugTicketOnly) {
-        if (success) {
-          setStep('redmine', '完了: チケット作成中', 'complete');
-          if (!debugTicketOnly) {
-            setStep('hyperv', '完了: 仮想マシン作成中', 'complete');
-          } else {
-            setStep('hyperv', '仮想マシン作成はスキップしました', 'skipped');
-          }
-          processingStatus.textContent = '完了しました';
-          processingOk.hidden = false;
+      function scheduleNextPoll() {
+        stopPolling();
+        pollTimer = window.setTimeout(pollJobStatus, 1500);
+      }
+
+      function pollJobStatus() {
+        if (!activeJobId) {
           return;
         }
 
-        processingStatus.textContent = '処理に失敗しました。OKで結果を確認してください。';
-        processingOk.hidden = false;
+        fetch('/entry/create/status/' + encodeURIComponent(activeJobId), {
+          method: 'GET',
+          credentials: 'same-origin'
+        })
+          .then(function (response) {
+            return response.json().then(function (json) {
+              return { ok: response.ok, body: json };
+            });
+          })
+          .then(function (result) {
+            if (!result.ok || !result.body.ok) {
+              throw new Error((result.body && result.body.message) || '進捗取得に失敗しました。');
+            }
+            renderJob(result.body.job);
+            if (result.body.job && result.body.job.status === 'running') {
+              scheduleNextPoll();
+            }
+          })
+          .catch(function (error) {
+            stopPolling();
+            processingStatus.textContent = '進捗取得に失敗しました: ' + String(error);
+            processingOk.hidden = false;
+            preventNavigation = false;
+            inFlight = false;
+          });
       }
 
       processingOk.addEventListener('click', function () {
@@ -990,13 +1054,12 @@
         inFlight = false;
         processingModal.hidden = true;
 
-        if (!pendingResultHtml) {
+        if (pendingRedirectUrl) {
+          window.location.href = pendingRedirectUrl;
           return;
         }
 
-        document.open();
-        document.write(pendingResultHtml);
-        document.close();
+        activeJobId = '';
       });
 
       form.addEventListener('submit', function (e) {
@@ -1012,51 +1075,42 @@
         }
 
         inFlight = true;
-        var formData = new FormData(form);
-        var ticketOnly = formData.get('ticket_only') === 'on';
-        formData.append('action', 'create');
-
         preventNavigation = true;
-        applyInitialSteps(ticketOnly);
-        startProgressTicker(ticketOnly);
-
-        processingStatus.textContent = '現在実行中: チケット作成中';
-        pendingResultHtml = '';
+        pendingRedirectUrl = '';
+        activeJobId = '';
+        processingStatus.textContent = '処理を開始しています...';
+        processingSteps.innerHTML = '';
+        processingOk.hidden = true;
         processingModal.hidden = false;
 
-        var submitUrl = form.getAttribute('action') || window.location.pathname;
+        var formData = new FormData(form);
+        formData.append('action', 'create');
 
-        fetch(submitUrl, {
+        fetch('/entry/create/start', {
           method: 'POST',
           body: formData,
           credentials: 'same-origin'
         })
           .then(function (response) {
-            return response.text().then(function (html) {
-              var parser = new DOMParser();
-              var doc = parser.parseFromString(html, 'text/html');
-              var hasSuccess = !!doc.querySelector('.status.success strong');
-              var hasError = !!doc.querySelector('.status.error');
-              return {
-                ok: response.ok,
-                html: html,
-                hasSuccess: hasSuccess,
-                hasError: hasError
-              };
+            return response.json().then(function (json) {
+              return { ok: response.ok, body: json };
             });
           })
           .then(function (result) {
-            stopProgressTicker();
-            finishSteps(result.ok && result.hasSuccess && !result.hasError, ticketOnly);
-            pendingResultHtml = result.html;
+            if (!result.ok || !result.body.ok || !result.body.job) {
+              throw new Error((result.body && result.body.message) || '処理開始に失敗しました。');
+            }
+
+            activeJobId = result.body.job.id;
+            renderJob(result.body.job);
+            scheduleNextPoll();
           })
-          .catch(function () {
-            stopProgressTicker();
+          .catch(function (error) {
+            stopPolling();
             preventNavigation = false;
             inFlight = false;
-            pendingResultHtml = '';
             processingModal.hidden = true;
-            window.alert('通信エラーが発生しました。ページを再読み込みして再実行してください。');
+            window.alert('処理開始に失敗しました: ' + String(error));
           });
       });
 

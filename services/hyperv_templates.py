@@ -9,7 +9,7 @@ def fetch_templates_from_host(host_ip, username, password):
     script = r"""
 $ErrorActionPreference = 'Stop'
 Get-VM |
-  Where-Object { $_.Name -like 'template*' } |
+    Where-Object { $_.Name -like '*VMEntry_template*' } |
   Select-Object -ExpandProperty Name |
   ConvertTo-Json -Compress
 """
@@ -25,7 +25,14 @@ Get-VM |
     else:
         names = []
 
-    return [(name.strip(), name.strip()) for name in names if name and name.strip()]
+    # ホストから取得したテンプレート名を正規化（?? ← → 【】）
+    normalized_names = []
+    for name in names:
+        if name and name.strip():
+            normalized_name = db._normalize_vm_template_option_text(name.strip())
+            normalized_names.append(normalized_name)
+
+    return [(name, name) for name in normalized_names if name]
 
 
 def _format_host_label(host_name, host_ip):

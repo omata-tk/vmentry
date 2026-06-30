@@ -1,7 +1,10 @@
 import json
 import ipaddress
+import threading
+import uuid
 
 from flask import jsonify, redirect, render_template, request, url_for
+from werkzeug.datastructures import MultiDict
 
 from core import db
 from services import hyperv, redmine
@@ -40,7 +43,8 @@ CONFIRM_FIELDS = [
     ("notes", "特記事項"),
     ("vm_template", "VMテンプレート"),
     ("clone_host_ip", "複製先ホスト"),
-    ("template_iso_path", "ISOイメージ（テンプレート複製後にマウント）"),
+    ("sysprep_enabled", "Sysprep 実行"),
+    ("template_iso_path", "ISOイメージ（Sysprep後にマウント）"),
     ("vcpu_count", "仮想プロセッサ カウント"),
     ("enable_nested_virtualization", "入れ子になった仮想化"),
     ("startup_memory", "起動メモリ"),
@@ -52,6 +56,257 @@ CONFIRM_FIELDS = [
     ("os_install_mode", "OSインストール方法"),
     ("os_iso_path", "OS ISO パス"),
 ]
+
+
+_ENTRY_JOB_LOCK = threading.Lock()
+_ENTRY_JOBS = {}
+
+
+def _build_entry_job_steps(ticket_only, sysprep_enabled):
+    steps = []
+    if not ticket_only:
+        steps.append(("vm_precheck", "仮想マシン事前確認中"))
+
+    steps.append(("ticket_create", "Redmineチケット作成中"))
+
+    if not ticket_only:
+        steps.append(("vm_clone", "仮想マシン複製中"))
+        steps.append(("vm_verify", "仮想マシン存在確認中"))
+        if sysprep_enabled:
+            steps.extend(
+                [
+                    ("vm_boot", "仮想マシン起動中"),
+                    ("sysprep", "Sysprep実行中"),
+                    ("vm_restart", "仮想マシン再起動中"),
+                    ("os_config", "OS設定中"),
+                ]
+            )
+
+    steps.append(("completed", "完了"))
+    return [{"code": code, "label": label, "status": "waiting"} for code, label in steps]
+
+
+def _create_entry_job(owner, ticket_only, sysprep_enabled):
+    job_id = str(uuid.uuid4())
+    job = {
+        "id": job_id,
+        "owner": owner,
+        "status": "running",
+        "message": "処理を開始しています。",
+        "stage_code": "",
+        "steps": _build_entry_job_steps(ticket_only, sysprep_enabled),
+        "result": None,
+        "error": None,
+    }
+    with _ENTRY_JOB_LOCK:
+        _ENTRY_JOBS[job_id] = job
+    return job_id
+
+
+def _get_entry_job(job_id):
+    with _ENTRY_JOB_LOCK:
+        job = _ENTRY_JOBS.get(job_id)
+        if not job:
+            return None
+        return {
+            "id": job["id"],
+            "owner": job["owner"],
+            "status": job["status"],
+            "message": job["message"],
+            "stage_code": job["stage_code"],
+            "steps": [dict(step) for step in job["steps"]],
+            "result": dict(job["result"]) if job.get("result") else None,
+            "error": job.get("error"),
+        }
+
+
+def _update_entry_job(job_id, stage_code, message):
+    with _ENTRY_JOB_LOCK:
+        job = _ENTRY_JOBS.get(job_id)
+        if not job:
+            return
+
+        job["stage_code"] = stage_code
+        job["message"] = message
+        reached = False
+        for step in job["steps"]:
+            if step["code"] == stage_code:
+                step["status"] = "active"
+                reached = True
+            elif not reached:
+                if step["status"] not in ("skipped", "error"):
+                    step["status"] = "complete"
+            else:
+                if step["status"] not in ("skipped", "error"):
+                    step["status"] = "waiting"
+
+
+def _complete_entry_job(job_id, result, message):
+    with _ENTRY_JOB_LOCK:
+        job = _ENTRY_JOBS.get(job_id)
+        if not job:
+            return
+
+        job["status"] = "success"
+        job["stage_code"] = "completed"
+        job["message"] = message
+        job["result"] = dict(result)
+        job["error"] = None
+        for step in job["steps"]:
+            step["status"] = "complete"
+
+
+def _fail_entry_job(job_id, error_message):
+    with _ENTRY_JOB_LOCK:
+        job = _ENTRY_JOBS.get(job_id)
+        if not job:
+            return
+
+        job["status"] = "error"
+        job["message"] = error_message
+        job["error"] = error_message
+        active_step = None
+        for step in job["steps"]:
+            if step["status"] == "active":
+                active_step = step
+                break
+        if active_step:
+            active_step["status"] = "error"
+
+
+def _perform_entry_create(form_data, api_key, user_name, ticket_data=None, progress_callback=None):
+    if ticket_data is None:
+        ticket_data, errors = build_ticket_data(form_data)
+        if errors:
+            raise RuntimeError(" ".join(errors))
+
+    result = None
+    try:
+        project_id = redmine.get_redmine_project_id(db.get_setting("project_name", ""), api_key=api_key)
+        if project_id is None:
+            raise RuntimeError(
+                f'プロジェクトが見つかりません: {db.get_setting("project_name", "")}'
+            )
+
+        confirmed_ip = (form_data.get("confirmed_ip") or "").strip()
+        if not confirmed_ip:
+            raise RuntimeError("確認画面の割当予定IPが取得できません。確認画面から再実行してください。")
+
+        if ticket_data.get("ip_assignment_mode") == "manual":
+            requested_ip = (ticket_data.get("manual_ip_address") or "").strip()
+            if requested_ip != confirmed_ip:
+                raise RuntimeError(
+                    "確認画面の手動IPが変更されています。入力画面に戻って再確認してください。"
+                )
+
+        if redmine.is_ip_already_registered(project_id, confirmed_ip, api_key=api_key):
+            raise RuntimeError(
+                f"確認後に同一IP ({confirmed_ip}) が登録されました。入力画面に戻って再確認してください。"
+            )
+
+        clone_request = None
+        if not ticket_data.get("ticket_only"):
+            clone_request = {
+                "deploy_type": ticket_data.get("vm_config", {}).get("deploy_type"),
+                "vm_template": ticket_data.get("vm_config", {}).get("vm_template"),
+                "vm_name": (form_data.get("vm_name") or "").strip(),
+                "confirmed_ip": confirmed_ip,
+                "target_subnet": ticket_data.get("target_subnet", ""),
+                "vhost_ip": _normalize_hyperv_host_ip(form_data.get("vhost_ip") or ""),
+                "clone_host_ip": _normalize_hyperv_host_ip(
+                    ticket_data.get("vm_config", {}).get("clone_host_ip", "")
+                ),
+                "vlan_id": ticket_data.get("vm_config", {}).get("manual", {}).get("vlan_id", ""),
+                "vlan_resolution_mode": ticket_data.get("vm_config", {}).get("vlan_resolution_mode", "none"),
+                "template_iso_mount": ticket_data.get("vm_config", {}).get("template_iso_mount", False),
+                "template_iso_path": ticket_data.get("vm_config", {}).get("template_iso_path", ""),
+                "sysprep_enabled": ticket_data.get("vm_config", {}).get("sysprep_enabled", False),
+                "os_user": (form_data.get("os_user") or "").strip(),
+                "os_password": (form_data.get("os_password") or "").strip(),
+                "hosts": _configured_hyperv_hosts(),
+            }
+            if progress_callback:
+                progress_callback("vm_precheck", "仮想マシン作成前の確認をしています。")
+            hyperv.precheck_virtual_machine(clone_request)
+
+        if progress_callback:
+            progress_callback("ticket_create", "Redmineチケットを作成しています。")
+
+        result = redmine.create_redmine_ticket(
+            project_id,
+            ticket_data,
+            confirmed_ip,
+            api_key=api_key,
+        )
+        if result.get("result") != "success":
+            raise RuntimeError(result.get("message", "チケット登録に失敗しました。"))
+
+        result["url"] = result.get("url") or build_ticket_url(result.get("id"))
+        result["subject"] = ticket_data.get("subject")
+        result["vm_name"] = form_data.get("vm_name")
+        result["target_subnet"] = ticket_data.get("target_subnet")
+
+        if clone_request:
+            hyperv.create_virtual_machine(clone_request, progress_callback=progress_callback)
+            db.append_log(
+                "entry",
+                user_name,
+                "info",
+                (
+                    f"vm clone success ticket_id={result.get('id')} "
+                    f"vm_name={clone_request['vm_name']} host={clone_request['clone_host_ip']} "
+                    f"template={clone_request['vm_template']} vlan={clone_request['vlan_id'] or '-'} "
+                    f"vlan_mode={clone_request.get('vlan_resolution_mode', 'none')} "
+                    f"sysprep={'on' if clone_request.get('sysprep_enabled') else 'off'}"
+                ),
+            )
+
+        db.append_log(
+            "entry",
+            user_name,
+            "info",
+            f'create success ticket_id={result.get("id")} vm_name={result.get("vm_name")} subnet={result.get("target_subnet")} ip={confirmed_ip}',
+        )
+        return result
+    except Exception as exc:
+        error = str(exc)
+        stage_code = ""
+        if "stage=" in error:
+            try:
+                stage_code = error.split("stage=", 1)[1].split()[0]
+            except Exception:
+                stage_code = ""
+        if result and result.get("result") == "success":
+            error = (
+                f"チケットID {result.get('id')} は作成しましたが、"
+                f"VM複製に失敗しました: {error}"
+            )
+        db.append_log(
+            "entry",
+            user_name,
+            "error",
+            (
+                f"create exception: {error} "
+                f"ticket_id={result.get('id') if result else '-'} "
+                f"stage={stage_code or '-'} "
+                f"vm_name={(form_data.get('vm_name') or '').strip() or '-'} "
+                f"host={_normalize_hyperv_host_ip(form_data.get('vhost_ip') or '') or '-'}"
+            ),
+        )
+        raise RuntimeError(error) from exc
+
+
+def _run_entry_create_job(job_id, form_data, api_key, user_name):
+    try:
+        result = _perform_entry_create(
+            form_data,
+            api_key,
+            user_name,
+            progress_callback=lambda stage_code, message: _update_entry_job(job_id, stage_code, message),
+        )
+        _complete_entry_job(job_id, result, "処理が完了しました。")
+    except Exception as exc:
+        _fail_entry_job(job_id, str(exc))
 
 
 def build_visible_confirm_fields(values):
@@ -76,6 +331,7 @@ def build_visible_confirm_fields(values):
             "vm_template",
             "clone_host_ip",
             "template_iso_path",
+            "sysprep_enabled",
             "vcpu_count",
             "enable_nested_virtualization",
             "startup_memory",
@@ -93,6 +349,7 @@ def build_visible_confirm_fields(values):
             "vm_template",
             "clone_host_ip",
             "template_iso_path",
+            "sysprep_enabled",
         ) and deploy_type != "template":
             continue
 
@@ -149,6 +406,7 @@ def form_defaults():
         "clone_host_ip": clone_host_default,
         "template_iso_mount": "",
         "template_iso_path": "",
+        "sysprep_enabled": "",
         "vcpu_count": "",
         "enable_nested_virtualization": "",
         "startup_memory": "",
@@ -231,6 +489,7 @@ def build_confirm_display_values(values):
         display_values["vlan_id"] = "-"
     display_values["enable_nested_virtualization"] = "有効" if values.get("enable_nested_virtualization") == "on" else "無効"
     display_values["use_dynamic_memory"] = "有効" if values.get("use_dynamic_memory") == "on" else "無効"
+    display_values["sysprep_enabled"] = "実行する" if values.get("sysprep_enabled") == "on" else "実行しない"
     display_values["os_install_mode"] = (
         "後でオペレーティングシステムをインストールする"
         if values.get("os_install_mode") == "later"
@@ -426,13 +685,20 @@ def build_ticket_data(form_data):
 
     if not ticket_only and not vm_name:
         errors.append("仮想マシン名は必須です。")
+    elif not ticket_only:
+        vm_name_error = hyperv.validate_vm_name(vm_name)
+        if vm_name_error:
+            errors.append(vm_name_error)
 
     deploy_type = (form_data.get("deploy_type") or "").strip()
     vm_template = (form_data.get("vm_template") or "").strip()
     clone_host_ip = (form_data.get("clone_host_ip") or "").strip()
     template_iso_mount = (form_data.get("template_iso_mount") or "").strip() == "on"
     template_iso_path = (form_data.get("template_iso_path") or "").strip()
+    sysprep_enabled = (form_data.get("sysprep_enabled") or "").strip() == "on"
     vm_host = (form_data.get("vhost_ip") or "").strip()
+    os_user = (form_data.get("os_user") or "").strip()
+    os_password = (form_data.get("os_password") or "").strip()
 
     vcpu_count = (form_data.get("vcpu_count") or "").strip()
     startup_memory = (form_data.get("startup_memory") or "").strip()
@@ -459,6 +725,8 @@ def build_ticket_data(form_data):
                 errors.append("IPアドレス（仮想ホスト）を選択してください。")
             elif configured_host_ips and _normalize_hyperv_host_ip(clone_host_ip) not in configured_host_ips:
                 errors.append("複製先ホストは管理者設定のホストIPから選択してください。")
+            if sysprep_enabled:
+                pass  # Sysprep 認証情報は管理者設定のテンプレート Sysprep 認証情報を使用するため、フォーム入力チェック不要
         elif deploy_type == "manual":
             if not vcpu_count or not startup_memory:
                 errors.append("手動作成の場合は仮想プロセッサ カウントと起動メモリが必須です。")
@@ -559,6 +827,7 @@ def build_ticket_data(form_data):
             "clone_host_ip": clone_host_ip,
             "template_iso_mount": template_iso_mount,
             "template_iso_path": template_iso_path,
+            "sysprep_enabled": sysprep_enabled,
             "manual": {
                 "vcpu_count": vcpu_count,
                 "enable_nested_virtualization": (form_data.get("enable_nested_virtualization") or "").strip() == "on",
@@ -667,6 +936,68 @@ def _filter_entries_for_browse(entries, browse_kind):
 
 
 def register_entry_routes(app):
+    @app.route("/entry/create/start", methods=["POST"])
+    def entry_create_start():
+        if not (get_session_api_key() or is_admin_session()):
+            return jsonify({"ok": False, "message": "認証が必要です。"}), 401
+
+        api_key = get_session_api_key()
+        if not api_key:
+            return jsonify({"ok": False, "message": "APIキーが未設定です。"}), 400
+
+        form_data = MultiDict(request.form)
+        ticket_only = (form_data.get("ticket_only") or "").strip() == "on"
+        sysprep_enabled = (form_data.get("sysprep_enabled") or "").strip() == "on"
+        user_name = get_session_user_name()
+        job_id = _create_entry_job(user_name, ticket_only, sysprep_enabled)
+
+        worker = threading.Thread(
+            target=_run_entry_create_job,
+            args=(job_id, form_data, api_key, user_name),
+            daemon=True,
+        )
+        worker.start()
+
+        job = _get_entry_job(job_id)
+        return jsonify(
+            {
+                "ok": True,
+                "job": {
+                    "id": job["id"],
+                    "status": job["status"],
+                    "message": job["message"],
+                    "stage_code": job["stage_code"],
+                    "steps": job["steps"],
+                    "redirect_url": url_for("entry", job_id=job_id),
+                },
+            }
+        )
+
+    @app.route("/entry/create/status/<job_id>", methods=["GET"])
+    def entry_create_status(job_id):
+        if not (get_session_api_key() or is_admin_session()):
+            return jsonify({"ok": False, "message": "認証が必要です。"}), 401
+
+        job = _get_entry_job(job_id)
+        if not job or job.get("owner") != get_session_user_name():
+            return jsonify({"ok": False, "message": "処理状況が見つかりません。"}), 404
+
+        return jsonify(
+            {
+                "ok": True,
+                "job": {
+                    "id": job["id"],
+                    "status": job["status"],
+                    "message": job["message"],
+                    "stage_code": job["stage_code"],
+                    "steps": job["steps"],
+                    "result": job.get("result"),
+                    "error": job.get("error"),
+                    "redirect_url": url_for("entry", job_id=job_id),
+                },
+            }
+        )
+
     @app.route("/", methods=["GET"])
     def index():
         if not (get_session_api_key() or is_admin_session()):
@@ -687,6 +1018,7 @@ def register_entry_routes(app):
         if not api_key:
             return redirect(url_for("admin") if is_admin_session() else url_for("login"))
 
+        job_id = (request.args.get("job_id") or "").strip()
         form_data = request.form if request.method == "POST" else {}
         values = build_values(form_data)
         error = None
@@ -696,6 +1028,16 @@ def register_entry_routes(app):
         confirmed_ip = ""
         action = (form_data.get("action") or "").strip()
         confirm_display_values = build_confirm_display_values(values)
+
+        if request.method == "GET" and job_id:
+            job = _get_entry_job(job_id)
+            if job and job.get("owner") == get_session_user_name():
+                if job.get("status") == "success":
+                    result = job.get("result")
+                    notice = "前回の作成処理が完了しました。"
+                elif job.get("status") == "error":
+                    error = job.get("error") or "処理に失敗しました。"
+                    notice = "前回の作成処理結果を表示しています。"
 
         if request.method == "POST" and action in ("confirm", "create"):
             selected_subnets = {value for value, _ in CURRENT_SUBNET_OPTIONS}
@@ -754,100 +1096,14 @@ def register_entry_routes(app):
                     )
             else:
                 try:
-                    project_id = redmine.get_redmine_project_id(db.get_setting("project_name", ""), api_key=api_key)
-                    if project_id is None:
-                        raise RuntimeError(
-                            f'プロジェクトが見つかりません: {db.get_setting("project_name", "")}'
-                        )
-
-                    confirmed_ip = (form_data.get("confirmed_ip") or "").strip()
-                    if not confirmed_ip:
-                        raise RuntimeError("確認画面の割当予定IPが取得できません。確認画面から再実行してください。")
-
-                    if ticket_data.get("ip_assignment_mode") == "manual":
-                        requested_ip = (ticket_data.get("manual_ip_address") or "").strip()
-                        if requested_ip != confirmed_ip:
-                            raise RuntimeError(
-                                "確認画面の手動IPが変更されています。"
-                                "入力画面に戻って再確認してください。"
-                            )
-
-                    if redmine.is_ip_already_registered(project_id, confirmed_ip, api_key=api_key):
-                        raise RuntimeError(
-                            f"確認後に同一IP ({confirmed_ip}) が登録されました。"
-                            "入力画面に戻って再確認してください。"
-                        )
-
-                    clone_request = None
-                    if not ticket_data.get("ticket_only"):
-                        clone_request = {
-                            "deploy_type": ticket_data.get("vm_config", {}).get("deploy_type"),
-                            "vm_template": ticket_data.get("vm_config", {}).get("vm_template"),
-                            "vm_name": (form_data.get("vm_name") or "").strip(),
-                            "vhost_ip": _normalize_hyperv_host_ip(form_data.get("vhost_ip") or ""),
-                            "clone_host_ip": _normalize_hyperv_host_ip(
-                                ticket_data.get("vm_config", {}).get("clone_host_ip", "")
-                            ),
-                            "vlan_id": ticket_data.get("vm_config", {}).get("manual", {}).get("vlan_id", ""),
-                            "vlan_resolution_mode": ticket_data.get("vm_config", {}).get("vlan_resolution_mode", "none"),
-                            "template_iso_mount": ticket_data.get("vm_config", {}).get("template_iso_mount", False),
-                            "template_iso_path": ticket_data.get("vm_config", {}).get("template_iso_path", ""),
-                            "hosts": _configured_hyperv_hosts(),
-                        }
-                        hyperv.precheck_virtual_machine(clone_request)
-
-                    result = redmine.create_redmine_ticket(
-                        project_id,
-                        ticket_data,
-                        confirmed_ip,
-                        api_key=api_key,
+                    result = _perform_entry_create(
+                        form_data,
+                        api_key,
+                        get_session_user_name(),
+                        ticket_data=ticket_data,
                     )
-                    if result.get("result") != "success":
-                        error = result.get("message", "チケット登録に失敗しました。")
-                        db.append_log(
-                            "entry",
-                            get_session_user_name(),
-                            "error",
-                            f"create failed: {error}",
-                        )
-                    else:
-                        result["url"] = result.get("url") or build_ticket_url(result.get("id"))
-                        result["subject"] = ticket_data.get("subject")
-                        result["vm_name"] = form_data.get("vm_name")
-                        result["target_subnet"] = ticket_data.get("target_subnet")
-                        if clone_request:
-                            hyperv.create_virtual_machine(clone_request)
-                            db.append_log(
-                                "entry",
-                                get_session_user_name(),
-                                "info",
-                                (
-                                    f"vm clone success ticket_id={result.get('id')} "
-                                    f"vm_name={clone_request['vm_name']} host={clone_request['clone_host_ip']} "
-                                    f"template={clone_request['vm_template']} vlan={clone_request['vlan_id'] or '-'} "
-                                    f"vlan_mode={clone_request.get('vlan_resolution_mode', 'none')}"
-                                ),
-                            )
-
-                        db.append_log(
-                            "entry",
-                            get_session_user_name(),
-                            "info",
-                            f'create success ticket_id={result.get("id")} vm_name={result.get("vm_name")} subnet={result.get("target_subnet")} ip={confirmed_ip}',
-                        )
                 except Exception as exc:
                     error = str(exc)
-                    if result and result.get("result") == "success":
-                        error = (
-                            f"チケットID {result.get('id')} は作成しましたが、"
-                            f"VM複製に失敗しました: {error}"
-                        )
-                    db.append_log(
-                        "entry",
-                        get_session_user_name(),
-                        "error",
-                        f"create exception: {error}",
-                    )
 
         return render_template(
             "entry.html",
@@ -885,10 +1141,28 @@ def register_entry_routes(app):
         if normalized_path is None:
             return jsonify({"ok": False, "message": "Xドライブ配下のパスのみ参照できます。"}), 400
 
+        requested_host_ip = _normalize_hyperv_host_ip(request.args.get("host_ip") or "")
+        configured_hosts = _configured_hyperv_hosts()
+        if requested_host_ip:
+            browse_hosts = [
+                host
+                for host in configured_hosts
+                if _normalize_hyperv_host_ip(host.get("ip") or "") == requested_host_ip
+            ]
+            if not browse_hosts:
+                return jsonify(
+                    {
+                        "ok": False,
+                        "message": f"指定されたホストが管理設定に見つかりません: {requested_host_ip}",
+                    }
+                ), 400
+        else:
+            browse_hosts = configured_hosts
+
         host_errors = []
         any_host_configured = False
 
-        for host in _configured_hyperv_hosts():
+        for host in browse_hosts:
             host_label = f"ホスト{host['index']}"
             if not host["ip"] or not host["user"] or not host["password"]:
                 host_errors.append(f"{host_label}: 接続設定が不足しています。")
@@ -923,7 +1197,10 @@ def register_entry_routes(app):
                 host_errors.append(f"{host_label}: {str(exc)}")
 
         if not any_host_configured:
-            message = "管理者設定のホスト1〜3に接続情報がありません。"
+            if requested_host_ip:
+                message = f"指定ホスト {requested_host_ip} の接続情報が不足しています。"
+            else:
+                message = "管理者設定のホスト1〜3に接続情報がありません。"
         else:
             message = "ホストサーバに接続できませんでした。"
             if host_errors:
