@@ -60,11 +60,33 @@ def build_visible_confirm_fields(values):
     template_iso_mount = (values.get("template_iso_mount") or "").strip() == "on"
     os_install_mode = (values.get("os_install_mode") or "").strip()
 
+    _raw_ticket_only = values.get("ticket_only")
+    ticket_only = _raw_ticket_only is True or (isinstance(_raw_ticket_only, str) and _raw_ticket_only.strip() == "on")
+
     visible_fields = []
     for field_key, field_label in CONFIRM_FIELDS:
         if field_key == "manual_ip_address" and ip_assignment_mode != "manual":
             continue
         if field_key == "target_subnet" and ip_assignment_mode == "manual":
+            continue
+
+        if ticket_only and field_key in (
+            "vm_name",
+            "vhost_ip",
+            "vm_template",
+            "clone_host_ip",
+            "template_iso_path",
+            "vcpu_count",
+            "enable_nested_virtualization",
+            "startup_memory",
+            "memory_unit",
+            "use_dynamic_memory",
+            "virtual_switch",
+            "vlan_id",
+            "manual_disks_json",
+            "os_install_mode",
+            "os_iso_path",
+        ):
             continue
 
         if field_key in (
@@ -138,7 +160,7 @@ def form_defaults():
         "manual_disks_json": "",
         "os_install_mode": "later",
         "os_iso_path": "",
-        "debug_ticket_only": "",
+        "ticket_only": "",
     }
 
 
@@ -335,7 +357,7 @@ def build_ticket_data(form_data):
     errors = []
     selected_subnets = {value for value, _ in CURRENT_SUBNET_OPTIONS}
 
-    debug_ticket_only = (form_data.get("debug_ticket_only") or "").strip() == "on"
+    ticket_only = (form_data.get("ticket_only") or "").strip() == "on"
 
     ip_assignment_mode = _normalize_ip_assignment_mode(form_data.get("ip_assignment_mode") or "")
     manual_ip_address = (form_data.get("manual_ip_address") or "").strip()
@@ -362,7 +384,7 @@ def build_ticket_data(form_data):
         else:
             target_subnet = _extract_subnet_prefix(manual_ip_address)
 
-    if not debug_ticket_only and not vm_name:
+    if not ticket_only and not vm_name:
         errors.append("仮想マシン名は必須です。")
 
     deploy_type = (form_data.get("deploy_type") or "").strip()
@@ -384,7 +406,7 @@ def build_ticket_data(form_data):
     if deploy_type and deploy_type not in ("template", "manual"):
         errors.append("作成方法が不正です。")
 
-    if not debug_ticket_only:
+    if not ticket_only:
         if deploy_type == "template":
             configured_host_ips = _configured_hyperv_host_ips()
             if not vm_template:
@@ -504,7 +526,7 @@ def build_ticket_data(form_data):
                 "os_iso_path": os_iso_path,
             },
         },
-        "debug_ticket_only": debug_ticket_only,
+        "ticket_only": ticket_only,
     }
     return ticket_data, errors
 
@@ -710,7 +732,7 @@ def register_entry_routes(app):
                         )
 
                     clone_request = None
-                    if not ticket_data.get("debug_ticket_only"):
+                    if not ticket_data.get("ticket_only"):
                         clone_request = {
                             "deploy_type": ticket_data.get("vm_config", {}).get("deploy_type"),
                             "vm_template": ticket_data.get("vm_config", {}).get("vm_template"),

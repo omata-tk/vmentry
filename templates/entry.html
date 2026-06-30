@@ -201,15 +201,16 @@
         </div>
       <h2 class="section-title">仮想マシン</h2>
     		  <p class="section-subtitle">VM作成に必要な項目を入力してください。</p>
-        <div class="field full" style="padding: 14px; border-radius: 15px; background: #fef2f2; border: 1px solid #fecaca; margin-bottom: 18px;">
+        <div class="field full" style="padding: 14px; border-radius: 15px; background: #f0fdf4; border: 1px solid #bbf7d0; margin-bottom: 18px;">
           <label class="check-item" style="margin-bottom: 0;">
-            <input type="checkbox" name="debug_ticket_only" {% if values.debug_ticket_only %}checked{% endif %}>
-            <strong style="color: #dc2626;">チケットだけ作成する（デバッグ用）</strong>
+            <input type="checkbox" id="ticket_only" name="ticket_only" {% if values.ticket_only %}checked{% endif %}>
+            <strong>チケットのみ作成する</strong>
           </label>
-          <div class="help" style="margin-top: 8px; color: #b91c1c;">
-            このチェックボックスをONにすると、VM作成をスキップし、Redmineチケットのみ作成します。
+          <div class="help" style="margin-top: 8px;">
+            チェックを入れると仮想マシンの作成をスキップし、Redmineチケットのみ作成します。
           </div>
         </div>
+        <div id="vm-creation-section">
         <div class="field"><label for="deploy_type">作成方法<span class="required-mark">*</span></label><select id="deploy_type" name="deploy_type" required><option value="template" {% if values.deploy_type == "template" %}selected{% endif %}>テンプレートから作成</option><option value="manual" {% if values.deploy_type == "manual" %}selected{% endif %}>手動作成</option></select></div>
         <div id="deploy-dependent-fields" class="form-section">
           <div class="form-section-body">
@@ -321,6 +322,7 @@
           </div>
         </div>
 
+        </div>
 						<div class="actions">
 							<button class="button" type="submit" name="action" value="confirm">確認する</button>
 						</div>
@@ -862,6 +864,36 @@
       updateIsoField();
       updateIpAssignmentField();
       updateDeployFields();
+
+      // チケットのみ作成：チェック時にVM作成セクションを非表示・必須解除
+      var ticketOnlyCheck = document.getElementById('ticket_only');
+      var vmCreationSection = document.getElementById('vm-creation-section');
+      var vmNameField = document.getElementById('vm_name');
+
+      function updateTicketOnlyState() {
+        if (!ticketOnlyCheck || !vmCreationSection) {
+          return;
+        }
+        var isTicketOnly = ticketOnlyCheck.checked;
+        if (isTicketOnly) {
+          setSectionVisibility(vmCreationSection, false);
+          if (vmNameField) {
+            vmNameField.dataset.wasRequired = vmNameField.required ? 'true' : 'false';
+            vmNameField.required = false;
+          }
+        } else {
+          setSectionVisibility(vmCreationSection, true);
+          if (vmNameField && vmNameField.dataset.wasRequired === 'true') {
+            vmNameField.required = true;
+          }
+          updateDeployFields();
+        }
+      }
+
+      if (ticketOnlyCheck) {
+        ticketOnlyCheck.addEventListener('change', updateTicketOnlyState);
+        updateTicketOnlyState();
+      }
     })();
 
     // 処理進捗表示とブラウザバック防止
@@ -976,12 +1008,12 @@
 
         inFlight = true;
         var formData = new FormData(form);
-        var debugTicketOnly = formData.get('debug_ticket_only') === 'on';
+        var ticketOnly = formData.get('ticket_only') === 'on';
         formData.append('action', 'create');
 
         preventNavigation = true;
-        applyInitialSteps(debugTicketOnly);
-        startProgressTicker(debugTicketOnly);
+        applyInitialSteps(ticketOnly);
+        startProgressTicker(ticketOnly);
 
         processingStatus.textContent = '現在実行中: チケット作成中';
         pendingResultHtml = '';
@@ -1010,7 +1042,7 @@
           })
           .then(function (result) {
             stopProgressTicker();
-            finishSteps(result.ok && result.hasSuccess && !result.hasError, debugTicketOnly);
+            finishSteps(result.ok && result.hasSuccess && !result.hasError, ticketOnly);
             pendingResultHtml = result.html;
           })
           .catch(function () {
