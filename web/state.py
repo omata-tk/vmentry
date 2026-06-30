@@ -14,7 +14,7 @@ CURRENT_VM_TEMPLATE_OPTIONS = list(DEFAULT_VM_TEMPLATE_OPTIONS)
 DEFAULT_VM_SWITCH_OPTIONS = list(db.get_master_options("vm_switch"))
 CURRENT_VM_SWITCH_OPTIONS = list(DEFAULT_VM_SWITCH_OPTIONS)
 
-DEFAULT_SUBNET_OPTIONS = list(db.get_master_options("subnet"))
+DEFAULT_SUBNET_OPTIONS = list(db.get_visible_subnet_options())
 CURRENT_SUBNET_OPTIONS = list(DEFAULT_SUBNET_OPTIONS)
 
 DEFAULT_OS_OPTIONS = list(db.get_master_options("os"))

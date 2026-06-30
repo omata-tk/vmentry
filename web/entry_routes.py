@@ -106,7 +106,6 @@ def build_visible_confirm_fields(values):
             "memory_unit",
             "use_dynamic_memory",
             "virtual_switch",
-            "vlan_id",
             "manual_disks_json",
             "os_install_mode",
             "os_iso_path",
@@ -216,7 +215,20 @@ def build_confirm_display_values(values):
     display_values["virtual_switch"] = vm_switch_label_map.get(
         values.get("virtual_switch", ""), values.get("virtual_switch", "")
     )
-    display_values["vlan_id"] = values.get("vlan_id", "").strip()
+    effective_vlan_id, vlan_mode = _resolve_effective_vlan_id(
+        values.get("target_subnet", ""),
+        values.get("vlan_id", ""),
+        values.get("deploy_type", ""),
+    )
+    if effective_vlan_id:
+        if vlan_mode == "manual":
+            display_values["vlan_id"] = f"{effective_vlan_id} (手動指定)"
+        elif vlan_mode == "subnet":
+            display_values["vlan_id"] = f"{effective_vlan_id} (対象サブネットから自動設定)"
+        else:
+            display_values["vlan_id"] = effective_vlan_id
+    else:
+        display_values["vlan_id"] = "-"
     display_values["enable_nested_virtualization"] = "有効" if values.get("enable_nested_virtualization") == "on" else "無効"
     display_values["use_dynamic_memory"] = "有効" if values.get("use_dynamic_memory") == "on" else "無効"
     display_values["os_install_mode"] = (
@@ -353,6 +365,34 @@ def _is_disallowed_host_octet(ip_text):
     return octet in {0, 1, 255}
 
 
+def _validate_vlan_id_text(vlan_text):
+    text = (vlan_text or "").strip()
+    if not text:
+        return "", None
+    try:
+        vlan_int = int(text)
+    except ValueError:
+        return "", "VLAN IDは数値で入力してください。"
+    if vlan_int < 1 or vlan_int > 4094:
+        return "", "VLAN IDは1から4094の範囲で入力してください。"
+    return str(vlan_int), None
+
+
+def _resolve_effective_vlan_id(target_subnet, manual_vlan_id, deploy_type):
+    manual_vlan, _ = _validate_vlan_id_text(manual_vlan_id)
+    if manual_vlan:
+        return manual_vlan, "manual"
+
+    if (deploy_type or "").strip() != "template":
+        return "", "none"
+
+    mapped_vlan = db.get_vlan_id_for_subnet(target_subnet)
+    mapped_vlan, _ = _validate_vlan_id_text(mapped_vlan)
+    if mapped_vlan:
+        return mapped_vlan, "subnet"
+    return "", "none"
+
+
 def build_ticket_data(form_data):
     errors = []
     selected_subnets = {value for value, _ in CURRENT_SUBNET_OPTIONS}
@@ -438,14 +478,6 @@ def build_ticket_data(form_data):
             elif switch_values and virtual_switch not in switch_values:
                 errors.append("仮想スイッチは候補から選択してください。")
 
-            if vlan_id:
-                try:
-                    vlan_int = int(vlan_id)
-                    if vlan_int < 1 or vlan_int > 4094:
-                        errors.append("VLAN IDは1から4094の範囲で入力してください。")
-                except ValueError:
-                    errors.append("VLAN IDは数値で入力してください。")
-
             manual_disks, parse_error = parse_manual_disks_json(manual_disks_raw)
             if parse_error:
                 errors.append(parse_error)
@@ -470,6 +502,20 @@ def build_ticket_data(form_data):
                 errors.append("オペレーティングシステムの設定が不正です。")
             elif os_install_mode == "iso" and not os_iso_path:
                 errors.append("ISOインストールを選択した場合はISOファイルのパスを入力してください。")
+
+    normalized_vlan_id = ""
+    vlan_resolution_mode = "none"
+    effective_vlan_id = ""
+    if not ticket_only:
+        normalized_vlan_id, vlan_error = _validate_vlan_id_text(vlan_id)
+        if vlan_error:
+            errors.append(vlan_error)
+
+        effective_vlan_id, vlan_resolution_mode = _resolve_effective_vlan_id(
+            target_subnet,
+            normalized_vlan_id,
+            deploy_type,
+        )
 
     assignee_name = (form_data.get("assignee_name") or "").strip()
     assigned_to_id = None
@@ -520,11 +566,12 @@ def build_ticket_data(form_data):
                 "memory_unit": memory_unit,
                 "use_dynamic_memory": (form_data.get("use_dynamic_memory") or "").strip() == "on",
                 "virtual_switch": virtual_switch,
-                "vlan_id": vlan_id,
+                "vlan_id": effective_vlan_id,
                 "disks": parse_manual_disks_json(manual_disks_raw)[0],
                 "os_install_mode": os_install_mode,
                 "os_iso_path": os_iso_path,
             },
+            "vlan_resolution_mode": vlan_resolution_mode,
         },
         "ticket_only": ticket_only,
     }
@@ -742,6 +789,7 @@ def register_entry_routes(app):
                                 ticket_data.get("vm_config", {}).get("clone_host_ip", "")
                             ),
                             "vlan_id": ticket_data.get("vm_config", {}).get("manual", {}).get("vlan_id", ""),
+                            "vlan_resolution_mode": ticket_data.get("vm_config", {}).get("vlan_resolution_mode", "none"),
                             "template_iso_mount": ticket_data.get("vm_config", {}).get("template_iso_mount", False),
                             "template_iso_path": ticket_data.get("vm_config", {}).get("template_iso_path", ""),
                             "hosts": _configured_hyperv_hosts(),
@@ -776,7 +824,8 @@ def register_entry_routes(app):
                                 (
                                     f"vm clone success ticket_id={result.get('id')} "
                                     f"vm_name={clone_request['vm_name']} host={clone_request['clone_host_ip']} "
-                                    f"template={clone_request['vm_template']}"
+                                    f"template={clone_request['vm_template']} vlan={clone_request['vlan_id'] or '-'} "
+                                    f"vlan_mode={clone_request.get('vlan_resolution_mode', 'none')}"
                                 ),
                             )
 

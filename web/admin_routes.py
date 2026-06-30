@@ -22,6 +22,7 @@ from web.state import (
 def refresh_master_data_from_redmine(api_key, executed_by=None):
     executor_name = (executed_by or "").strip() or get_session_user_name()
     latest = redmine.fetch_latest_form_master(db.get_setting("project_name", ""), api_key=api_key)
+    hidden_subnets = db.get_hidden_subnet_set()
 
     CURRENT_ASSIGNEE_NAME_TO_ID.clear()
     CURRENT_ASSIGNEE_NAME_TO_ID.update(latest.get("assignee_name_to_id", {}))
@@ -33,9 +34,17 @@ def refresh_master_data_from_redmine(api_key, executed_by=None):
     CURRENT_SUBNET_OPTIONS.clear()
     if subnet_prefixes:
         for subnet_prefix in subnet_prefixes:
+            if subnet_prefix in hidden_subnets:
+                continue
             CURRENT_SUBNET_OPTIONS.append((subnet_prefix, subnet_prefix))
     else:
-        CURRENT_SUBNET_OPTIONS.extend(DEFAULT_SUBNET_OPTIONS)
+        CURRENT_SUBNET_OPTIONS.extend(
+            [
+                (value, label)
+                for value, label in DEFAULT_SUBNET_OPTIONS
+                if (value or "").strip() not in hidden_subnets
+            ]
+        )
 
     latest_os_options = latest.get("os_options", [])
     CURRENT_OS_OPTIONS.clear()
@@ -173,6 +182,96 @@ def refresh_vm_templates(executed_by=None):
         raise
 
 
+def _is_valid_subnet_prefix(prefix_text):
+    text = (prefix_text or "").strip()
+    parts = text.split(".")
+    if len(parts) != 3:
+        return False
+    if not all(part.isdigit() for part in parts):
+        return False
+    try:
+        octets = [int(part) for part in parts]
+    except ValueError:
+        return False
+    return all(0 <= value <= 255 for value in octets)
+
+
+def _normalize_vlan_text(vlan_text):
+    text = (vlan_text or "").strip()
+    if not text:
+        return "", None
+    if not text.isdigit():
+        return "", "VLAN IDは数値で入力してください。"
+    vlan_int = int(text)
+    if vlan_int < 1 or vlan_int > 4094:
+        return "", "VLAN IDは1から4094の範囲で入力してください。"
+    return str(vlan_int), None
+
+
+def _sort_subnet_prefixes(prefixes):
+    def _sort_key(prefix):
+        try:
+            return tuple(int(part) for part in prefix.split("."))
+        except ValueError:
+            return (999, 999, 999)
+
+    return sorted(prefixes, key=_sort_key)
+
+
+def _build_subnet_vlan_rows():
+    hidden_subnets = db.get_hidden_subnet_set()
+    current_subnets = [value for value, _ in CURRENT_SUBNET_OPTIONS if (value or "").strip()]
+    subnet_vlan_map = db.get_subnet_vlan_map()
+    all_subnets = []
+    seen = set()
+
+    for subnet in current_subnets:
+        if subnet in hidden_subnets:
+            continue
+        if subnet in seen:
+            continue
+        seen.add(subnet)
+        all_subnets.append(subnet)
+
+    for subnet in _sort_subnet_prefixes(subnet_vlan_map.keys()):
+        if subnet in hidden_subnets:
+            continue
+        if subnet in seen:
+            continue
+        seen.add(subnet)
+        all_subnets.append(subnet)
+
+    rows = []
+    for subnet in all_subnets:
+        rows.append(
+            {
+                "subnet_prefix": subnet,
+                "vlan_id": (subnet_vlan_map.get(subnet) or "").strip(),
+            }
+        )
+
+    rows.append({"subnet_prefix": "", "vlan_id": ""})
+    return rows
+
+
+def _build_rows_from_form(form):
+    prefixes = form.getlist("subnet_prefix")
+    vlans = form.getlist("subnet_vlan_id")
+    row_count = max(len(prefixes), len(vlans), 1)
+    rows = []
+    for idx in range(row_count):
+        rows.append(
+            {
+                "subnet_prefix": (prefixes[idx] if idx < len(prefixes) else "").strip(),
+                "vlan_id": (vlans[idx] if idx < len(vlans) else "").strip(),
+            }
+        )
+
+    if not rows or rows[-1]["subnet_prefix"] or rows[-1]["vlan_id"]:
+        rows.append({"subnet_prefix": "", "vlan_id": ""})
+    return rows
+
+
 def register_admin_routes(app):
     @app.route("/admin", methods=["GET", "POST"])
     def admin():
@@ -181,7 +280,12 @@ def register_admin_routes(app):
 
         error = None
         message = None
+        subnet_vlan_rows = _build_subnet_vlan_rows()
         action = (request.form.get("action") or "").strip() if request.method == "POST" else ""
+        delete_target_subnet = ""
+        if action.startswith("delete_subnet_vlan|"):
+            _, _, delete_target_subnet = action.partition("|")
+            action = "delete_subnet_vlan"
 
         if request.method == "POST" and action == "save_settings":
             try:
@@ -232,6 +336,111 @@ def register_admin_routes(app):
             except Exception as exc:
                 error = str(exc)
 
+        if request.method == "POST" and action == "save_subnet_vlan":
+            try:
+                rows = _build_rows_from_form(request.form)
+                mapping_options = []
+                seen_subnets = set()
+
+                for row in rows:
+                    subnet_prefix = (row.get("subnet_prefix") or "").strip()
+                    vlan_text = (row.get("vlan_id") or "").strip()
+
+                    if not subnet_prefix and not vlan_text:
+                        continue
+
+                    if not subnet_prefix:
+                        raise RuntimeError("サブネットを入力してください。")
+                    if not _is_valid_subnet_prefix(subnet_prefix):
+                        raise RuntimeError(
+                            f"サブネット形式が不正です: {subnet_prefix} (例: 192.168.10)"
+                        )
+
+                    if subnet_prefix in seen_subnets:
+                        raise RuntimeError(f"サブネットが重複しています: {subnet_prefix}")
+                    seen_subnets.add(subnet_prefix)
+
+                    normalized_vlan, vlan_error = _normalize_vlan_text(vlan_text)
+                    if vlan_error:
+                        raise RuntimeError(f"{subnet_prefix}: {vlan_error}")
+
+                    if normalized_vlan:
+                        mapping_options.append((subnet_prefix, normalized_vlan))
+
+                active_subnets = _sort_subnet_prefixes(seen_subnets)
+                db.replace_master_options(
+                    "subnet",
+                    [(subnet, subnet) for subnet in active_subnets],
+                    updated_by=get_session_user_name(),
+                )
+
+                hidden_subnets = db.get_hidden_subnet_set()
+                remaining_hidden = _sort_subnet_prefixes(
+                    [subnet for subnet in hidden_subnets if subnet not in seen_subnets]
+                )
+                db.replace_master_options(
+                    "subnet_hidden",
+                    [(subnet, subnet) for subnet in remaining_hidden],
+                    updated_by=get_session_user_name(),
+                )
+
+                CURRENT_SUBNET_OPTIONS.clear()
+                CURRENT_SUBNET_OPTIONS.extend([(subnet, subnet) for subnet in active_subnets])
+
+                db.replace_master_options(
+                    "subnet_vlan",
+                    mapping_options,
+                    updated_by=get_session_user_name(),
+                )
+                subnet_vlan_rows = _build_subnet_vlan_rows()
+                message = f"サブネット-VLAN対応を保存しました。登録件数: {len(mapping_options)}"
+            except Exception as exc:
+                subnet_vlan_rows = _build_rows_from_form(request.form)
+                error = str(exc)
+
+        if request.method == "POST" and action == "delete_subnet_vlan":
+            try:
+                subnet_to_delete = (delete_target_subnet or request.form.get("delete_target_subnet") or "").strip()
+                if not subnet_to_delete:
+                    raise RuntimeError("削除対象のサブネットが指定されていません。")
+
+                current_subnets = [
+                    (value, label)
+                    for value, label in db.get_master_options("subnet")
+                    if (value or "").strip() != subnet_to_delete
+                ]
+                db.replace_master_options(
+                    "subnet",
+                    current_subnets,
+                    updated_by=get_session_user_name(),
+                )
+
+                hidden_subnets = db.get_hidden_subnet_set()
+                hidden_subnets.add(subnet_to_delete)
+                db.replace_master_options(
+                    "subnet_hidden",
+                    [(subnet, subnet) for subnet in _sort_subnet_prefixes(hidden_subnets)],
+                    updated_by=get_session_user_name(),
+                )
+
+                current_map = db.get_subnet_vlan_map()
+                new_mapping = [(subnet, vlan) for subnet, vlan in current_map.items() if subnet != subnet_to_delete]
+
+                db.replace_master_options(
+                    "subnet_vlan",
+                    new_mapping,
+                    updated_by=get_session_user_name(),
+                )
+                CURRENT_SUBNET_OPTIONS.clear()
+                CURRENT_SUBNET_OPTIONS.extend(
+                    [(value, label) for value, label in current_subnets if (value or "").strip()]
+                )
+                subnet_vlan_rows = _build_subnet_vlan_rows()
+                message = f"サブネット {subnet_to_delete} を削除し、除外リストへ登録しました。"
+            except Exception as exc:
+                subnet_vlan_rows = _build_subnet_vlan_rows()
+                error = str(exc)
+
         settings_display = dict(db.get_all_settings())
         for i in range(1, 4):
             if settings_display.get(f"hyperv_host{i}_password"):
@@ -240,6 +449,7 @@ def register_admin_routes(app):
         return render_template(
             "admin.html",
             settings=settings_display,
+            subnet_vlan_rows=subnet_vlan_rows,
             logs=db.get_recent_logs(20),
             message=message,
             error=error,

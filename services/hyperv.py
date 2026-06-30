@@ -71,6 +71,19 @@ def _resolve_clone_context(request_data):
   }
 
 
+def _normalize_vlan_id(vlan_id):
+  text = (vlan_id or "").strip()
+  if not text:
+    return ""
+  try:
+    vlan_int = int(text)
+  except ValueError:
+    raise RuntimeError("VLAN IDは数値で入力してください。")
+  if vlan_int < 1 or vlan_int > 4094:
+    raise RuntimeError("VLAN IDは1から4094の範囲で入力してください。")
+  return str(vlan_int)
+
+
 def precheck_virtual_machine(request_data):
   context = _resolve_clone_context(request_data)
   vm_template = context["vm_template"]
@@ -231,7 +244,7 @@ def create_virtual_machine(request_data):
     host_ip = context["host_ip"]
     host_user = context["host_user"]
     host_password = context["host_password"]
-    vlan_id = (request_data.get("vlan_id") or "").strip()
+    vlan_id = _normalize_vlan_id(request_data.get("vlan_id"))
     iso_path = (request_data.get("template_iso_path") or "").strip() if request_data.get("template_iso_mount") else ""
 
     templates = fetch_templates_from_host(host_ip, host_user, host_password)

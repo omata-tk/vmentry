@@ -108,6 +108,49 @@
 		</section>
 
 		<section class="card">
+			<h2>サブネット-VLAN対応</h2>
+			<p style="margin-top:0; color:#64748b; font-size:.84rem; line-height:1.6;">
+				サブネットごとのVLAN IDを編集します。最下行の空白行から新規追加してください。削除ボタンはサブネット自体を除外リストへ移動し、以後の同期でも表示しません。
+			</p>
+			<form method="post" id="subnet_vlan_form">
+				<div style="max-height: 400px; overflow-y: auto; border: 1px solid #dbe3ee; border-radius: 12px;">
+					<table style="width:100%; border-collapse: collapse;">
+						<thead style="position: sticky; top: 0; background: #fff; border-bottom: 2px solid #0f766e;">
+							<tr><th style="padding:10px; text-align:left; font-weight:800; color:#0f172a;">サブネット（例: 192.168.10）</th><th style="padding:10px; text-align:left; font-weight:800; color:#0f172a;">VLAN ID（1-4094）</th><th style="padding:10px; text-align:center; font-weight:800; color:#0f172a; width:80px;">操作</th></tr>
+						</thead>
+						<tbody>
+						{% for row in subnet_vlan_rows %}
+							<tr style="border-bottom:1px solid #e2e8f0;">
+								{% if row.subnet_prefix %}
+									<td style="padding:10px;"><input name="subnet_prefix" value="{{ row.subnet_prefix }}" style="width:100%; box-sizing:border-box;" readonly></td>
+									<td style="padding:10px;"><input name="subnet_vlan_id" value="{{ row.vlan_id }}" style="width:100%; box-sizing:border-box;" inputmode="numeric" pattern="[0-9]*" placeholder="100"></td>
+									<td style="padding:10px; text-align:center;">
+										<button
+											type="submit"
+											class="small-button"
+											style="background:#dc2626; color:#fff; padding:5px 8px; font-size:.78rem; border:0; border-radius:6px; cursor:pointer;"
+											name="action"
+											value="delete_subnet_vlan|{{ row.subnet_prefix }}"
+											onclick="return confirm('サブネット {{ row.subnet_prefix }} を削除して除外リストへ登録します。よろしいですか？');"
+										>削除</button>
+									</td>
+								{% else %}
+									<td style="padding:10px;"><input name="subnet_prefix" value="" style="width:100%; box-sizing:border-box;" placeholder="192.168.10"></td>
+									<td style="padding:10px;"><input name="subnet_vlan_id" value="" style="width:100%; box-sizing:border-box;" inputmode="numeric" pattern="[0-9]*" placeholder="100"></td>
+									<td style="padding:10px; text-align:center;">-</td>
+								{% endif %}
+							</tr>
+						{% endfor %}
+						</tbody>
+					</table>
+				</div>
+				<div style="margin-top:12px;">
+					<button type="submit" name="action" value="save_subnet_vlan">変更を保存</button>
+				</div>
+			</form>
+		</section>
+
+		<section class="card">
 			<h2>直近ログ</h2>
 			<table>
 				<thead><tr><th>日時</th><th>種別</th><th>実行者</th><th>状態</th><th>メッセージ</th></tr></thead>

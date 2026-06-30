@@ -231,6 +231,11 @@
                 </div>
                 <div class="help">ホスト上のISOファイルパスを入力または参照してください。</div>
               </div>
+              <div class="field" style="margin-top: 8px;">
+                <label for="template_vlan_id">VLAN ID（任意）</label>
+                <input id="template_vlan_id" name="vlan_id" value="{{ values.vlan_id }}" inputmode="numeric" pattern="[0-9]*" placeholder="1 - 4094">
+                <div class="help">未入力の場合、対象サブネットに対応するVLANを自動設定します。対応が未定義ならVLAN未設定で作成します。</div>
+              </div>
             </div>
             <div id="manual-fields">
               <div class="manual-card">

@@ -189,6 +189,42 @@ def get_vhost_ip_display_map():
     return {option_value: option_label for option_value, option_label in get_master_options('vhost')}
 
 
+def get_subnet_vlan_map():
+    result = {}
+    for subnet_prefix, vlan_text in get_master_options('subnet_vlan'):
+        subnet = (subnet_prefix or '').strip()
+        vlan = (vlan_text or '').strip()
+        if not subnet or not vlan:
+            continue
+        result[subnet] = vlan
+    return result
+
+
+def get_hidden_subnet_set():
+    hidden = set()
+    for option_value, _ in get_master_options('subnet_hidden'):
+        subnet = (option_value or '').strip()
+        if subnet:
+            hidden.add(subnet)
+    return hidden
+
+
+def get_visible_subnet_options():
+    hidden = get_hidden_subnet_set()
+    return [
+        (option_value, option_label)
+        for option_value, option_label in get_master_options('subnet')
+        if (option_value or '').strip() not in hidden
+    ]
+
+
+def get_vlan_id_for_subnet(subnet_prefix):
+    subnet = (subnet_prefix or '').strip()
+    if not subnet:
+        return ''
+    return get_subnet_vlan_map().get(subnet, '')
+
+
 def _normalize_log_type(log_type):
     return 'entry' if (log_type or '').strip().lower() == 'entry' else 'sync'
 
