@@ -48,6 +48,12 @@
     .status.success { background: rgba(22,101,52,.1); border: 1px solid rgba(22,101,52,.18); color: #166534; }
     .status.error { background: rgba(180,83,9,.1); border: 1px solid rgba(180,83,9,.18); color: #b45309; }
     .status strong { display: block; margin-bottom: 6px; }
+    .processing-step { padding: 8px 0; text-align: left; display: flex; align-items: center; gap: 8px; }
+    .processing-step.active { color: #0f766e; font-weight: 600; }
+    .processing-step.complete { color: #166534; }
+    .processing-step.waiting { color: #94a3b8; }
+    .processing-step.skipped { color: #64748b; }
+
     .pill-row { display: flex; flex-wrap: wrap; gap: 8px; }
     .pill { display: inline-flex; align-items: center; padding: 8px 10px; border-radius: 999px; background: rgba(15,23,42,.06); font-size: .8rem; font-weight: 700; color: #334155; }
 		.confirm-sheet { border-radius: 16px; border: 1px solid #dbe3ee; background: #f8fafc; padding: 14px; }
@@ -139,7 +145,7 @@
 
 					{% if confirm %}
 					<div class="status success"><strong>入力内容の確認</strong>内容を確認して問題なければ「この内容で作成」を押してください。</div>
-					<form method="post">
+          <form id="entry-create-form" method="post">
 						{% for key, value in values.items() %}
             {% if key != 'usage' %}
 						<input type="hidden" name="{{ key }}" value="{{ value }}">
@@ -347,6 +353,26 @@
       </aside>
     </div>
   </main>
+  <!-- 処理進捗表示モーダル -->
+  <div id="processing-modal" class="browser-modal" hidden>
+    <div class="browser-panel" role="dialog" aria-modal="true" aria-label="処理中">
+      <div class="browser-top">
+        <strong>処理中</strong>
+      </div>
+      <div style="padding: 24px; text-align: center;">
+        <div style="font-size: 3rem; margin-bottom: 12px;">⏳</div>
+        <div id="processing-status" style="font-size: 1rem; color: #0f172a; margin-bottom: 16px; font-weight: 600;">処理を開始しています...</div>
+        <div id="processing-steps" style="margin-top: 16px; color: #64748b; font-size: 0.9rem;">
+          <div class="processing-step" data-step="redmine">待機中... チケット作成中</div>
+          <div class="processing-step" data-step="hyperv">待機中... 仮想マシン作成中</div>
+        </div>
+        <div style="margin-top: 18px;">
+          <button id="processing-ok" class="small-button" type="button" hidden>OK</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="host-path-browser" class="browser-modal" hidden>
     <div class="browser-panel" role="dialog" aria-modal="true" aria-label="ホストXドライブ参照">
       <div class="browser-top">
@@ -836,6 +862,176 @@
       updateIsoField();
       updateIpAssignmentField();
       updateDeployFields();
+    })();
+
+    // 処理進捗表示とブラウザバック防止
+    (function () {
+      var processingModal = document.getElementById('processing-modal');
+      var processingStatus = document.getElementById('processing-status');
+      var processingSteps = document.getElementById('processing-steps');
+      var processingOk = document.getElementById('processing-ok');
+      var form = document.getElementById('entry-create-form');
+      var preventNavigation = false;
+      var inFlight = false;
+      var progressTimer = null;
+      var pendingResultHtml = '';
+
+      if (!form || !processingModal || !processingSteps || !processingStatus || !processingOk) {
+        return;
+      }
+
+      function setStep(stepKey, text, className) {
+        var node = processingSteps.querySelector('[data-step="' + stepKey + '"]');
+        if (!node) {
+          return;
+        }
+        node.textContent = text;
+        node.className = 'processing-step ' + className;
+      }
+
+      function stopProgressTicker() {
+        if (progressTimer) {
+          window.clearInterval(progressTimer);
+          progressTimer = null;
+        }
+      }
+
+      function startProgressTicker(debugTicketOnly) {
+        var vmPhaseStarted = false;
+        stopProgressTicker();
+        progressTimer = window.setInterval(function () {
+          if (debugTicketOnly) {
+            setStep('redmine', '実行中... チケット作成中', 'active');
+            setStep('hyperv', '仮想マシン作成はスキップしました', 'skipped');
+            processingStatus.textContent = '現在実行中: チケット作成中';
+            return;
+          }
+
+          if (!vmPhaseStarted) {
+            vmPhaseStarted = true;
+            setStep('redmine', '完了: チケット作成中', 'complete');
+            setStep('hyperv', '実行中... 仮想マシン作成中', 'active');
+            processingStatus.textContent = '現在実行中: 仮想マシン作成中';
+            return;
+          }
+
+          setStep('redmine', '完了: チケット作成中', 'complete');
+          setStep('hyperv', '実行中... 仮想マシン作成中', 'active');
+          processingStatus.textContent = '現在実行中: 仮想マシン作成中';
+        }, 2500);
+      }
+
+      function applyInitialSteps(debugTicketOnly) {
+        setStep('redmine', '実行中... チケット作成中', 'active');
+        if (debugTicketOnly) {
+          setStep('hyperv', '仮想マシン作成はスキップしました', 'skipped');
+        } else {
+          setStep('hyperv', '待機中... 仮想マシン作成中', 'waiting');
+        }
+        processingOk.hidden = true;
+      }
+
+      function finishSteps(success, debugTicketOnly) {
+        if (success) {
+          setStep('redmine', '完了: チケット作成中', 'complete');
+          if (!debugTicketOnly) {
+            setStep('hyperv', '完了: 仮想マシン作成中', 'complete');
+          } else {
+            setStep('hyperv', '仮想マシン作成はスキップしました', 'skipped');
+          }
+          processingStatus.textContent = '完了しました';
+          processingOk.hidden = false;
+          return;
+        }
+
+        processingStatus.textContent = '処理に失敗しました。OKで結果を確認してください。';
+        processingOk.hidden = false;
+      }
+
+      processingOk.addEventListener('click', function () {
+        preventNavigation = false;
+        inFlight = false;
+        processingModal.hidden = true;
+
+        if (!pendingResultHtml) {
+          return;
+        }
+
+        document.open();
+        document.write(pendingResultHtml);
+        document.close();
+      });
+
+      form.addEventListener('submit', function (e) {
+        var actionButton = e.submitter;
+        var action = actionButton ? actionButton.value : '';
+        if (action !== 'create') {
+          return;
+        }
+
+        e.preventDefault();
+        if (inFlight) {
+          return;
+        }
+
+        inFlight = true;
+        var formData = new FormData(form);
+        var debugTicketOnly = formData.get('debug_ticket_only') === 'on';
+        formData.append('action', 'create');
+
+        preventNavigation = true;
+        applyInitialSteps(debugTicketOnly);
+        startProgressTicker(debugTicketOnly);
+
+        processingStatus.textContent = '現在実行中: チケット作成中';
+        pendingResultHtml = '';
+        processingModal.hidden = false;
+
+        var submitUrl = form.getAttribute('action') || window.location.pathname;
+
+        fetch(submitUrl, {
+          method: 'POST',
+          body: formData,
+          credentials: 'same-origin'
+        })
+          .then(function (response) {
+            return response.text().then(function (html) {
+              var parser = new DOMParser();
+              var doc = parser.parseFromString(html, 'text/html');
+              var hasSuccess = !!doc.querySelector('.status.success strong');
+              var hasError = !!doc.querySelector('.status.error');
+              return {
+                ok: response.ok,
+                html: html,
+                hasSuccess: hasSuccess,
+                hasError: hasError
+              };
+            });
+          })
+          .then(function (result) {
+            stopProgressTicker();
+            finishSteps(result.ok && result.hasSuccess && !result.hasError, debugTicketOnly);
+            pendingResultHtml = result.html;
+          })
+          .catch(function () {
+            stopProgressTicker();
+            preventNavigation = false;
+            inFlight = false;
+            pendingResultHtml = '';
+            processingModal.hidden = true;
+            window.alert('通信エラーが発生しました。ページを再読み込みして再実行してください。');
+          });
+      });
+
+      window.addEventListener('beforeunload', function (e) {
+        if (!preventNavigation || !inFlight) {
+          return;
+        }
+
+        e.preventDefault();
+        e.returnValue = '';
+        return '';
+      });
     })();
   </script>
 </body>
